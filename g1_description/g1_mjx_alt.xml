@@ -109,6 +109,7 @@
     <mesh name="right_shoulder_yaw_link" file="right_shoulder_yaw_link.STL"/>
     <mesh name="right_elbow_link" file="right_elbow_link.STL"/>
     <mesh name="right_wrist_roll_rubber_hand" file="right_wrist_roll_rubber_hand.STL"/>
+    <mesh name="forearm" file="forearm.stl"/>
   </asset>
 
   <worldbody>
@@ -238,10 +239,9 @@
                   <body name="left_wrist_roll_rubber_hand" pos="0.1 0.00188791 -0.01">
                     <inertial pos="0.107947 0.00163512 0.00202245" quat="0.494051 0.504265 0.48416 0.516933" mass="0.356929" diaginertia="0.00200292 0.0019426 0.000195232"/>
                     <joint name="left_wrist_roll_joint" class="wrist_roll"/>
-                    <geom class="visual" mesh="left_wrist_roll_rubber_hand"/>
+                    <geom class="visual" mesh="forearm"/>
                     <site name="left_palm" pos="0.08 0 0" size="0.01"/>
-                    <geom name="left_hand_collision" class="collision" type="capsule" size="0.05"
-                      fromto="0.05 0 0 0.1 0 0" rgba=".2 .6 .2 .2"/>
+                    <geom name="left_hand_collision" class="collision" type="sphere" size="0.02" pos="0.16 0 0" rgba=".2 .6 .2 .2"/>
                   </body>
                 </body>
               </body>
@@ -273,10 +273,9 @@
                   <body name="right_wrist_roll_rubber_hand" pos="0.1 -0.00188791 -0.01">
                     <inertial pos="0.107947 -0.00163512 0.00202245" quat="0.516933 0.48416 0.504265 0.494051" mass="0.356929" diaginertia="0.00200292 0.0019426 0.000195232"/>
                     <joint name="right_wrist_roll_joint" class="wrist_roll"/>
-                    <geom class="visual" mesh="right_wrist_roll_rubber_hand"/>
+                    <geom class="visual" mesh="forearm"/>
                     <site name="right_palm" pos="0.08 0 0" size="0.01"/>
-                    <geom name="right_hand_collision" class="collision" type="capsule" size="0.05"
-                      fromto="0.05 0 0 0.1 0 0" rgba=".2 .6 .2 .2"/>
+                    <geom name="right_hand_collision" class="collision" type="sphere" size="0.02" pos="0.16 0 0" rgba=".2 .6 .2 .2"/>
                   </body>
                 </body>
               </body>
