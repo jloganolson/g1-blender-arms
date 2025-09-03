@@ -1,0 +1,6 @@
+---
+description: Use uv .venv
+globs:
+alwaysApply: true
+---
+Whenever running python or installing python libraries in this project, use the uv .env, e.g. `source .venv/bin/activate && python test.py` and `uv pip install mujoco`.
