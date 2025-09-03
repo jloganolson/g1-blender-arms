@@ -32,6 +32,18 @@ class GeomInfo:
 
 
 @dataclass
+class JointInfo:
+    """Information about a joint in the MJCF model."""
+    name: str
+    type: str = "hinge"  # hinge, slide, ball, free, etc.
+    axis: Optional[Tuple[float, float, float]] = None
+    range: Optional[Tuple[float, float]] = None
+    damping: Optional[float] = None
+    stiffness: Optional[float] = None
+    limited: bool = False
+
+
+@dataclass
 class BodyInfo:
     """Information about a body in the MJCF hierarchy."""
     name: str
@@ -40,6 +52,7 @@ class BodyInfo:
     parent: Optional[str] = None
     children: List[str] = None
     geometries: List[GeomInfo] = None
+    joint: Optional[JointInfo] = None  # Joint connecting this body to its parent
     
     def __post_init__(self):
         if self.children is None:
@@ -60,6 +73,7 @@ class MJCFParser:
         self.meshes: Dict[str, MeshInfo] = {}
         self.bodies: Dict[str, BodyInfo] = {}
         self.materials: Dict[str, Dict] = {}
+        self.joints: Dict[str, JointInfo] = {}  # All joints indexed by name
         
         # Parse the MJCF file
         self._parse_assets()
@@ -151,6 +165,55 @@ class MJCFParser:
         
         return geom_info
     
+    def _parse_joint(self, joint_elem: ET.Element) -> JointInfo:
+        """Parse a joint element."""
+        joint_name = joint_elem.get('name', 'unnamed_joint')
+        joint_type = joint_elem.get('type', 'hinge')
+        
+        # Parse axis (default to Z-axis for hinge joints)
+        axis_text = joint_elem.get('axis', '0 0 1')
+        axis = self._parse_vector3(axis_text, (0.0, 0.0, 1.0))
+        
+        # Parse range
+        range_text = joint_elem.get('range')
+        joint_range = None
+        if range_text:
+            try:
+                values = [float(x) for x in range_text.strip().split()]
+                if len(values) >= 2:
+                    joint_range = (values[0], values[1])
+            except (ValueError, IndexError):
+                pass
+        
+        # Parse other properties
+        damping = None
+        damping_text = joint_elem.get('damping')
+        if damping_text:
+            try:
+                damping = float(damping_text)
+            except ValueError:
+                pass
+        
+        stiffness = None
+        stiffness_text = joint_elem.get('stiffness')
+        if stiffness_text:
+            try:
+                stiffness = float(stiffness_text)
+            except ValueError:
+                pass
+        
+        limited = joint_elem.get('limited', 'false').lower() == 'true'
+        
+        return JointInfo(
+            name=joint_name,
+            type=joint_type,
+            axis=axis,
+            range=joint_range,
+            damping=damping,
+            stiffness=stiffness,
+            limited=limited
+        )
+    
     def _parse_body(self, body_elem: ET.Element, parent_name: Optional[str] = None) -> str:
         """Parse a body element recursively."""
         body_name = body_elem.get('name', 'unnamed_body')
@@ -176,6 +239,26 @@ class MJCFParser:
             # Only add geometries that reference meshes
             if geom_info.mesh_name:
                 body_info.geometries.append(geom_info)
+        
+        # Parse joint in this body (connects this body to its parent)
+        joint_elem = body_elem.find('joint')
+        if joint_elem is not None:
+            joint_info = self._parse_joint(joint_elem)
+            body_info.joint = joint_info
+            self.joints[joint_info.name] = joint_info
+        
+        # Also parse freejoint elements
+        freejoint_elem = body_elem.find('freejoint')
+        if freejoint_elem is not None:
+            joint_name = freejoint_elem.get('name', 'unnamed_freejoint')
+            joint_info = JointInfo(
+                name=joint_name,
+                type='free',
+                axis=None,
+                range=None
+            )
+            body_info.joint = joint_info
+            self.joints[joint_info.name] = joint_info
         
         # Store this body
         self.bodies[body_name] = body_info
@@ -307,7 +390,10 @@ class MJCFParser:
                     self.print_hierarchy(name, indent)
         else:
             body = self.bodies[body_name]
-            print("  " * indent + f"{body_name}: pos={body.position}, quat={body.quaternion}")
+            joint_desc = ""
+            if body.joint:
+                joint_desc = f", joint={body.joint.name} ({body.joint.type})"
+            print("  " * indent + f"{body_name}: pos={body.position}, quat={body.quaternion}{joint_desc}")
             
             # Print geometries
             for geom in body.geometries:
@@ -331,12 +417,32 @@ class MJCFParser:
                     mesh_names.add(geom_info.mesh_name)
         return sorted(list(mesh_names))
     
+    def get_joint_hierarchy(self) -> Dict[str, List[str]]:
+        """Get joint hierarchy for skeleton creation."""
+        hierarchy = {}
+        for body_name, body_info in self.bodies.items():
+            if body_info.joint:
+                parent_joint = None
+                if body_info.parent and body_info.parent in self.bodies:
+                    parent_body = self.bodies[body_info.parent]
+                    parent_joint = parent_body.joint.name if parent_body.joint else None
+                
+                hierarchy[body_info.joint.name] = {
+                    'parent_joint': parent_joint,
+                    'body_name': body_name,
+                    'joint_type': body_info.joint.type,
+                    'axis': body_info.joint.axis,
+                    'range': body_info.joint.range
+                }
+        return hierarchy
+    
     def get_summary(self) -> Dict[str, int]:
         """Get a summary of the parsed MJCF."""
         return {
             'total_meshes_defined': len(self.meshes),
             'total_bodies': len(self.bodies),
             'total_materials': len(self.materials),
+            'total_joints': len(self.joints),
             'meshes_used': len(self.get_mesh_list())
         }
 

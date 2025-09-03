@@ -14,6 +14,9 @@ from scipy.spatial.transform import Rotation
 
 from mjcf_parser import MJCFParser
 from utils_3d import load_stl, simplify_mesh, export_scene_to_glb, render_scene, print_mesh_info
+from armature_utils import ArmatureBuilder
+from skinning_utils import SkinnedMeshBuilder, create_test_poses
+from pose_deformation import PoseDeformer
 
 
 def apply_transform_to_mesh(mesh: trimesh.Trimesh, position: np.ndarray, rotation_matrix: np.ndarray) -> trimesh.Trimesh:
@@ -48,7 +51,10 @@ def mjcf_to_glb(
     reduction_ratio: float = 0.3,
     target_faces: Optional[int] = None,
     render_preview: bool = True,
-    skip_missing: bool = True
+    skip_missing: bool = True,
+    include_armature: bool = False,
+    include_skinning: bool = False,
+    create_test_poses_flag: bool = False
 ) -> trimesh.Scene:
     """
     Convert an MJCF file to GLB with correctly positioned meshes.
@@ -62,6 +68,9 @@ def mjcf_to_glb(
         target_faces: Target number of faces per mesh
         render_preview: Whether to render preview images
         skip_missing: Whether to skip missing mesh files
+        include_armature: Whether to include skeleton/armature in the output
+        include_skinning: Whether to include vertex weights for rigging
+        create_test_poses_flag: Whether to create test pose images
         
     Returns:
         The combined trimesh.Scene object
@@ -89,6 +98,7 @@ def mjcf_to_glb(
     # Create the scene
     scene = trimesh.Scene()
     processed_meshes = {}
+    simplified_meshes = {}  # Store simplified meshes for skinning
     total_faces = 0
     total_vertices = 0
     
@@ -128,41 +138,114 @@ def mjcf_to_glb(
                     simplified_mesh = simplify_mesh(base_mesh, target_faces, reduction_ratio)
                     print_mesh_info(simplified_mesh, f"Simplified {mesh_name}")
                     processed_meshes[mesh_name] = simplified_mesh
+                    simplified_meshes[mesh_name] = simplified_mesh  # Store for skinning
                 else:
                     processed_meshes[mesh_name] = base_mesh
+                    simplified_meshes[mesh_name] = base_mesh  # Store for skinning
             
             base_mesh = processed_meshes[mesh_name]
             
-            # Create a transformed copy for each location
-            for i, (body_name, position, rotation_matrix, material) in enumerate(transforms):
-                print(f"  Adding to body: {body_name}")
-                print(f"    Position: {position}")
-                print(f"    Material: {material}")
-                
-                # Transform the mesh
-                transformed_mesh = apply_transform_to_mesh(base_mesh, position, rotation_matrix)
-                
-                # Create a unique name for this instance
-                instance_name = f"{body_name}_{mesh_name}"
-                if len(transforms) > 1:
-                    instance_name += f"_instance_{i}"
-                
-                # Add to scene
-                scene.add_geometry(transformed_mesh, node_name=instance_name)
-                
-                # Update totals
-                total_faces += len(transformed_mesh.faces)
-                total_vertices += len(transformed_mesh.vertices)
+            # Skip regular mesh processing if we're doing skinning (will be handled later)
+            if not include_skinning:
+                # Create a transformed copy for each location
+                for i, (body_name, position, rotation_matrix, material) in enumerate(transforms):
+                    print(f"  Adding to body: {body_name}")
+                    print(f"    Position: {position}")
+                    print(f"    Material: {material}")
+                    
+                    # Transform the mesh
+                    transformed_mesh = apply_transform_to_mesh(base_mesh, position, rotation_matrix)
+                    
+                    # Create a unique name for this instance
+                    instance_name = f"{body_name}_{mesh_name}"
+                    if len(transforms) > 1:
+                        instance_name += f"_instance_{i}"
+                    
+                    # Add to scene
+                    scene.add_geometry(transformed_mesh, node_name=instance_name)
+                    
+                    # Update totals
+                    total_faces += len(transformed_mesh.faces)
+                    total_vertices += len(transformed_mesh.vertices)
         
         except Exception as e:
             print(f"  ERROR processing {mesh_name}: {e}")
             if not skip_missing:
                 raise
     
-    print(f"\n=== Scene Assembly Complete ===")
-    print(f"Total geometries: {len(scene.geometry)}")
-    print(f"Total faces: {total_faces:,}")
-    print(f"Total vertices: {total_vertices:,}")
+    # Handle skinning if requested
+    if include_skinning:
+        print(f"\n=== Creating Skinned Scene ===")
+        armature_builder = ArmatureBuilder(parser)
+        skinned_builder = SkinnedMeshBuilder(parser, armature_builder)
+        
+        # Create skinned scene (replaces regular scene)
+        scene = skinned_builder.create_skinned_scene(mesh_transforms, simplified_meshes)
+        
+        # Update totals from skinned scene
+        total_faces = sum(len(geom.faces) for geom in scene.geometry.values() if hasattr(geom, 'faces'))
+        total_vertices = sum(len(geom.vertices) for geom in scene.geometry.values() if hasattr(geom, 'vertices'))
+        
+        print(f"\n=== Skinned Scene Complete ===")
+        print(f"Total geometries: {len(scene.geometry)}")
+        print(f"Total faces: {total_faces:,}")
+        print(f"Total vertices: {total_vertices:,}")
+        
+        # Add armature visualization if also requested
+        if include_armature:
+            print(f"\nAdding armature visualization...")
+            armature_scene = armature_builder.create_trimesh_armature()
+            if armature_scene:
+                print(f"Adding {len(armature_scene.geometry)} bones to scene")
+                for name, geom in armature_scene.geometry.items():
+                    scene.add_geometry(geom, node_name=f"armature_{name}")
+        
+        # Create test poses if requested
+        if create_test_poses_flag:
+            print(f"\n=== Creating Test Poses ===")
+            bones = armature_builder.bones
+            test_poses = create_test_poses(bones)
+            
+            # Create pose deformer
+            pose_deformer = PoseDeformer(bones)
+            
+            for pose_name, pose_angles in test_poses.items():
+                print(f"\n{'='*50}")
+                print(f"CREATING POSE: {pose_name.upper()}")
+                print(f"{'='*50}")
+                
+                if pose_angles:
+                    # Apply pose deformation
+                    posed_scene = pose_deformer.create_posed_scene(scene, pose_angles)
+                    pose_output_path = Path("output") / f"{output_path.stem}_{pose_name}.png"
+                    render_scene(posed_scene, f"G1 Robot - {pose_name}", pose_output_path)
+                    print(f"✅ Saved deformed pose: {pose_output_path}")
+                else:
+                    # No pose changes, just render base scene
+                    pose_output_path = Path("output") / f"{output_path.stem}_{pose_name}.png"
+                    render_scene(scene, f"G1 Robot - {pose_name}", pose_output_path)
+                    print(f"📷 Saved base pose: {pose_output_path}")
+    
+    else:
+        print(f"\n=== Scene Assembly Complete ===")
+        print(f"Total geometries: {len(scene.geometry)}")
+        print(f"Total faces: {total_faces:,}")
+        print(f"Total vertices: {total_vertices:,}")
+        
+        # Add armature if requested
+        if include_armature:
+            print(f"\nGenerating armature...")
+            armature_builder = ArmatureBuilder(parser)
+            armature_scene = armature_builder.create_trimesh_armature()
+            
+            if armature_scene:
+                print(f"Adding {len(armature_scene.geometry)} bones to scene")
+                # Merge armature into main scene
+                for name, geom in armature_scene.geometry.items():
+                    scene.add_geometry(geom, node_name=f"armature_{name}")
+                
+                # Print armature info
+                armature_builder.print_armature_info()
     
     # Export to GLB
     print(f"\nExporting to GLB...")
@@ -171,7 +254,7 @@ def mjcf_to_glb(
     # Render preview if requested
     if render_preview:
         print(f"Rendering preview...")
-        preview_path = output_path.with_suffix('.png')
+        preview_path = Path("output") / f"{output_path.stem}.png"
         render_scene(scene, "MJCF Robot Assembly", preview_path)
     
     print(f"\n✅ Conversion complete!")
@@ -201,6 +284,12 @@ def main():
     parser.add_argument('--no-render', action='store_true', help='Skip rendering preview')
     parser.add_argument('--strict', action='store_true', 
                        help='Fail on missing meshes (default: skip missing)')
+    parser.add_argument('--armature', action='store_true', 
+                       help='Include skeleton/armature in the output GLB')
+    parser.add_argument('--skinning', action='store_true',
+                       help='Include vertex weights for rigging (enables skinning)')
+    parser.add_argument('--test-poses', action='store_true',
+                       help='Create test pose images to verify rigging')
     
     # Debug options
     parser.add_argument('--debug', action='store_true', help='Print debug information')
@@ -246,7 +335,10 @@ def main():
             reduction_ratio=args.ratio,
             target_faces=args.target_faces,
             render_preview=not args.no_render,
-            skip_missing=not args.strict
+            skip_missing=not args.strict,
+            include_armature=args.armature,
+            include_skinning=args.skinning,
+            create_test_poses_flag=args.test_poses
         )
         
         return 0
