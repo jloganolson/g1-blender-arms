@@ -98,7 +98,7 @@ def simple_mjcf_to_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml",
         png_path,
         view_size=512,
         colorful=True,
-        camera_distance_factor=1.8
+        camera_distance_factor=1.2
     )
     
     print(f"✅ Conversion complete!")

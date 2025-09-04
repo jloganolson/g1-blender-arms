@@ -121,6 +121,8 @@ def export_scene_to_glb(scene: trimesh.Scene, output_path: Union[str, Path]) -> 
         output_path: Path to save GLB file
     """
     output_path = Path(output_path)
+    # INSERT_YOUR_CODE
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Export to GLB
     exported = scene.export(file_type='glb')
@@ -407,6 +409,27 @@ def render_scene_multiview(scene: trimesh.Scene, title: str = "Multi-View Scene"
         # Distance for camera placement (closer = larger robot)
         cam_distance = size * camera_distance_factor
         
+        # Define camera transforms for different views
+        # Note: Using look-at approach for all views to ensure they point at the robot
+        camera_transforms = {
+            'front': {
+                'translation': np.array([0, -cam_distance, 0]),
+                'rotation': None  # Will be computed to look at center
+            },
+            'side': {
+                'translation': np.array([cam_distance, 0, 0]),
+                'rotation': None  # Will be computed to look at center
+            },
+            'top': {
+                'translation': np.array([0, 0, cam_distance]),
+                'rotation': None  # Will be computed to look at center
+            },
+            'perspective': {
+                'translation': np.array([cam_distance * 0.7, -cam_distance * 0.7, cam_distance * 0.5]),
+                'rotation': None  # Will be computed to look at center
+            }
+        }
+        
         # Create simplified renders for each view
         rendered_views = {}
         view_names = ['front', 'side', 'top', 'perspective']
@@ -420,7 +443,47 @@ def render_scene_multiview(scene: trimesh.Scene, title: str = "Multi-View Scene"
                 # Create a copy of the scene for this view
                 scene_copy = scene.copy()
                 
-                # Render the view (trimesh will handle camera automatically)
+                # Set up camera transform for this view
+                camera_info = camera_transforms[view_name]
+                camera_pos = center + camera_info['translation']
+                
+                # Always compute rotation to look at center to ensure camera points at robot
+                # Create look-at matrix
+                forward = (center - camera_pos)
+                forward = forward / np.linalg.norm(forward)
+                
+                # Choose appropriate up vector based on view
+                if view_name == 'top':
+                    # For top view, use Y-axis as up direction
+                    world_up = np.array([0, 1, 0])
+                else:
+                    # For other views, use Z-axis as up direction
+                    world_up = np.array([0, 0, 1])
+                
+                right = np.cross(forward, world_up)
+                if np.linalg.norm(right) < 1e-6:
+                    # Handle edge case where forward and up are parallel
+                    right = np.array([1, 0, 0]) if view_name == 'top' else np.array([1, 0, 0])
+                else:
+                    right = right / np.linalg.norm(right)
+                
+                up = np.cross(right, forward)
+                up = up / np.linalg.norm(up)
+                
+                rotation_matrix = np.column_stack([right, up, -forward])
+                
+                # Create camera transform matrix
+                camera_transform = np.eye(4)
+                camera_transform[:3, :3] = rotation_matrix
+                camera_transform[:3, 3] = camera_pos
+                
+                # Apply camera transform to scene
+                scene_copy.camera_transform = camera_transform
+                
+                # Set up camera with reasonable field of view
+                scene_copy.camera.fov = (60, 60)  # degrees
+                
+                # Render the view
                 image_data = scene_copy.save_image(resolution=(view_size, view_size))
                 
                 # Convert to PIL Image
