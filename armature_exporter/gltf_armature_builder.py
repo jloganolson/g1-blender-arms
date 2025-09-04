@@ -115,18 +115,9 @@ class GLTFArmatureBuilder:
     def _add_mesh_to_gltf(self, mesh_name: str, mesh: trimesh.Trimesh, 
                          transform: np.ndarray) -> int:
         """Add a mesh to the GLTF and return the mesh index."""
-        # Apply coordinate system correction for Blender (MJCF -> Blender)
-        blender_correction = np.array([
-            [1,  0,  0,  0],  # X stays X
-            [0,  0,  1,  0],  # Y becomes Z 
-            [0, -1,  0,  0],  # Z becomes -Y
-            [0,  0,  0,  1]   # Translation unchanged
-        ])
-        corrected_transform = blender_correction @ transform
-        
-        # Apply transform to mesh
+        # Don't apply transform to mesh geometry - let the mesh node handle positioning
         transformed_mesh = mesh.copy()
-        transformed_mesh.apply_transform(corrected_transform)
+        
         
         # Get mesh data
         vertices = transformed_mesh.vertices.astype(np.float32)
@@ -265,39 +256,26 @@ class GLTFArmatureBuilder:
             # Create node for this joint
             node = Node(name=bone_name)
             
-            # Apply coordinate system correction for Blender
-            blender_correction = np.array([
-                [1,  0,  0,  0],  # X stays X
-                [0,  0,  1,  0],  # Y becomes Z 
-                [0, -1,  0,  0],  # Z becomes -Y
-                [0,  0,  0,  1]   # Translation unchanged
-            ])
-            
-            # Calculate bone position relative to parent
+            # Calculate bone position relative to parent (using raw MJCF coordinates)
             if bone.parent_bone and bone.parent_bone in self.bones:
                 # Child bone: position relative to parent
                 parent_bone = self.bones[bone.parent_bone]
                 
-                # Get corrected global transforms (these already include all intermediate bodies)
-                corrected_bone_transform = blender_correction @ bone.transform_matrix
-                corrected_parent_transform = blender_correction @ parent_bone.transform_matrix
+                # Get global transforms (these already include all intermediate bodies)
+                bone_transform = bone.transform_matrix
+                parent_transform = parent_bone.transform_matrix
                 
                 # Calculate relative position: difference in world positions
                 # This works because the parser already computed global positions through all intermediate bodies
-                bone_world_pos = corrected_bone_transform[:3, 3]
-                parent_world_pos = corrected_parent_transform[:3, 3]
+                bone_world_pos = bone_transform[:3, 3]
+                parent_world_pos = parent_transform[:3, 3]
                 
                 # For GLTF bones, we need the local offset from parent to child
                 # Since both positions are in the same coordinate system, simple subtraction works
                 translation = (bone_world_pos - parent_world_pos).tolist()
             else:
                 # Root bone: use world position
-                corrected_transform = blender_correction @ bone.transform_matrix
-                translation = corrected_transform[:3, 3].tolist()
-                
-                # Adjust root bone position for better placement
-                if bone_name == "waist_yaw_joint":
-                    translation[2] = 0.0  # At waist level after coordinate correction
+                translation = bone.transform_matrix[:3, 3].tolist()
             
             node.translation = translation
             
@@ -364,7 +342,7 @@ class GLTFArmatureBuilder:
         
         # Add meshes
         print("Adding meshes...")
-        mesh_transforms = self.parser.get_mesh_transforms_detailed()
+        mesh_transforms = self.parser.get_mesh_transforms()
         
         for mesh_name, transforms in mesh_transforms.items():
             mesh_file_path = self.parser.get_mesh_file_path(mesh_name)
@@ -395,11 +373,12 @@ class GLTFArmatureBuilder:
                 continue
             
             # Add each transform instance
-            for i, (body_name, position, rotation_matrix, material, geom_pos, geom_quat) in enumerate(transforms):
+            for i, (body_name, position, rotation_matrix, material) in enumerate(transforms):
                 # Create instance name for weight lookup
                 instance_name = f"{body_name}_{mesh_name}"
                 if len(transforms) > 1:
                     instance_name += f"_{i}"
+                
                 
                 transform_matrix = np.eye(4)
                 transform_matrix[:3, :3] = rotation_matrix
@@ -414,19 +393,13 @@ class GLTFArmatureBuilder:
                         if controlling_bone_name in self.bones:
                             bone = self.bones[controlling_bone_name]
                             
-                            # Get bone transform (with coordinate correction)
-                            blender_correction = np.array([
-                                [1,  0,  0,  0],  # X stays X
-                                [0,  0,  1,  0],  # Y becomes Z 
-                                [0, -1,  0,  0],  # Z becomes -Y
-                                [0,  0,  0,  1]   # Translation unchanged
-                            ])
-                            bone_transform = blender_correction @ bone.transform_matrix
+                            # Get bone transform (using raw MJCF coordinates)
+                            bone_transform = bone.transform_matrix
                             
                             # Make mesh transform relative to bone by removing bone's transform
                             try:
                                 bone_inverse = np.linalg.inv(bone_transform)
-                                transform_matrix = bone_inverse @ blender_correction @ transform_matrix
+                                transform_matrix = bone_inverse @ transform_matrix
                             except np.linalg.LinAlgError:
                                 # If bone transform is not invertible, use original transform
                                 pass
@@ -450,35 +423,15 @@ class GLTFArmatureBuilder:
                 # Create mesh node as child of transform node
                 mesh_node = Node(name=instance_name, mesh=mesh_index)
                 
-                # Apply geom-specific offsets to the mesh node if present
-                if geom_pos:
-                    # Apply coordinate correction to geom position
-                    blender_correction = np.array([
-                        [1,  0,  0,  0],  # X stays X
-                        [0,  0,  1,  0],  # Y becomes Z 
-                        [0, -1,  0,  0],  # Z becomes -Y
-                        [0,  0,  0,  1]   # Translation unchanged
-                    ])
-                    geom_pos_4d = np.array([*geom_pos, 1.0])
-                    corrected_geom_pos = (blender_correction @ geom_pos_4d)[:3]
-                    mesh_node.translation = corrected_geom_pos.tolist()
+                # Use raw MJCF coordinates (no coordinate correction)
+                # The get_mesh_transforms() method already combines body and geom transforms
+                from scipy.spatial.transform import Rotation
                 
-                if geom_quat:
-                    # Convert MJCF quaternion (w,x,y,z) to GLTF quaternion (x,y,z,w)
-                    # Apply coordinate correction
-                    from scipy.spatial.transform import Rotation
-                    geom_rotation = Rotation.from_quat([geom_quat[1], geom_quat[2], geom_quat[3], geom_quat[0]])  # MJCF w,x,y,z -> scipy x,y,z,w
-                    geom_rot_matrix = geom_rotation.as_matrix()
-                    
-                    # Apply Blender coordinate correction
-                    blender_correction_3x3 = np.array([
-                        [1,  0,  0],   # X stays X
-                        [0,  0,  1],   # Y becomes Z 
-                        [0, -1,  0]    # Z becomes -Y
-                    ])
-                    corrected_geom_rot = blender_correction_3x3 @ geom_rot_matrix @ blender_correction_3x3.T
-                    corrected_rotation = Rotation.from_matrix(corrected_geom_rot)
-                    mesh_node.rotation = corrected_rotation.as_quat().tolist()  # Returns x,y,z,w for GLTF
+                mesh_node.translation = position.tolist()
+                # Convert rotation matrix to quaternion for GLTF
+                rotation = Rotation.from_matrix(rotation_matrix)
+                mesh_node.rotation = rotation.as_quat().tolist()  # Returns x,y,z,w for GLTF
+                
                 
                 # Add skin to mesh if it has weights
                 if instance_name in self.mesh_instance_weights and self.mesh_instance_weights[instance_name]:
@@ -574,11 +527,32 @@ def build_bone_hierarchy(parser: MJCFParser, target_joints: List[str]) -> Tuple[
             else:
                 break
         
-        # Calculate bone transform (position in world space)
-        global_pos, global_rot = parser.compute_global_transform(body_name)
+        # Calculate bone transform using same logic as meshes
+        # Get mesh transforms for this body to ensure consistency
+        mesh_transforms = parser.get_mesh_transforms()
+        
+        # Find a mesh associated with this body to get the transform
+        body_position = None
+        body_rotation = None
+        
+        for mesh_name, transforms in mesh_transforms.items():
+            for body_name_in_transform, position, rotation_matrix, material in transforms:
+                if body_name_in_transform == body_name:
+                    body_position = position
+                    body_rotation = rotation_matrix
+                    break
+            if body_position is not None:
+                break
+        
+        # Fallback to compute_global_transform if no mesh found for this body
+        if body_position is None:
+            global_pos, global_rot = parser.compute_global_transform(body_name)
+            body_position = global_pos
+            body_rotation = global_rot
+        
         transform_matrix = np.eye(4)
-        transform_matrix[:3, :3] = global_rot
-        transform_matrix[:3, 3] = global_pos
+        transform_matrix[:3, :3] = body_rotation
+        transform_matrix[:3, 3] = body_position
         
         # Create bone
         bone = BoneInfo(
