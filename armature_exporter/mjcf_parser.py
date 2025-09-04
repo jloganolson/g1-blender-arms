@@ -473,9 +473,15 @@ class MJCFParser:
         for body_name, body_info in self.bodies.items():
             if body_info.joint:
                 parent_joint = None
-                if body_info.parent and body_info.parent in self.bodies:
-                    parent_body = self.bodies[body_info.parent]
-                    parent_joint = parent_body.joint.name if parent_body.joint else None
+                
+                # Walk up the body hierarchy to find the nearest ancestor with a joint
+                current_parent = body_info.parent
+                while current_parent and current_parent in self.bodies:
+                    parent_body = self.bodies[current_parent]
+                    if parent_body.joint:
+                        parent_joint = parent_body.joint.name
+                        break
+                    current_parent = parent_body.parent
                 
                 hierarchy[body_info.joint.name] = {
                     'parent_joint': parent_joint,

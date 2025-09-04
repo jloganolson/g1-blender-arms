@@ -515,6 +515,73 @@ def create_hierarchical_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml",
     print(f"   GLB: {output_path}")
     print(f"   Metadata: {output_path.replace('.glb', '.json')}")
 
+def create_full_body_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                        output_name: str = "rigged_full_body") -> None:
+    """
+    Create a rigged GLB with complete kinematic chains to ankles and forearms.
+    This includes all major joints in both legs and arms.
+    
+    Args:
+        mjcf_path: Path to MJCF file
+        output_name: Output filename (without extension)
+    """
+    print("🦴 Creating full body rig with complete kinematic chains...")
+    
+    # Create rigged exporter
+    exporter = RiggedGLBExporter(mjcf_path)
+    
+    # Manually select key joints for full body coverage
+    # Excludes floating_base_joint (which is usually not needed for rigging)
+    full_body_joints = [
+        # Waist
+        "waist_yaw_joint",
+        
+        # Right leg (hip to ankle)
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint", 
+        "right_hip_yaw_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
+        
+        # Left leg (hip to ankle) 
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_hip_yaw_joint", 
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        
+        # Right arm (shoulder to wrist)
+        "right_shoulder_pitch_joint",
+        "right_shoulder_roll_joint",
+        "right_shoulder_yaw_joint",
+        "right_elbow_joint",
+        "right_wrist_roll_joint",
+        
+        # Left arm (shoulder to wrist)
+        "left_shoulder_pitch_joint", 
+        "left_shoulder_roll_joint",
+        "left_shoulder_yaw_joint",
+        "left_elbow_joint",
+        "left_wrist_roll_joint"
+    ]
+    
+    exporter.set_target_joints(full_body_joints)
+    
+    # Export the rigged GLB
+    output_path = f"output/{output_name}.glb"
+    exporter.export_rigged_glb(output_path)
+    
+    # Print summary
+    exporter.print_rigging_summary()
+    
+    print(f"\n✅ Full body rig created with {len(full_body_joints)} joints!")
+    print(f"   GLB: {output_path}")
+    print(f"   Metadata: {output_path.replace('.glb', '.json')}")
+    print("🎯 Complete kinematic chains: waist → shoulders → elbows → wrists")
+    print("                            : waist → hips → knees → ankles")
+
 def create_simple_waist_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
                            output_name: str = "rigged_robot") -> None:
     """

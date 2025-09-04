@@ -567,6 +567,51 @@ def create_rigged_hierarchical_glb(mjcf_path: str = "./g1_description/g1_mjx_alt
     print(f"   File: {output_path}")
     print(f"🎯 Ready for Blender import with functional joint hierarchy!")
 
+def create_rigged_full_body_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                               output_name: str = "rigged_full_body") -> None:
+    """
+    Create a fully rigged GLB with complete kinematic chains to ankles and forearms.
+    This creates a comprehensive rig suitable for full body animation.
+    
+    Args:
+        mjcf_path: Path to MJCF file
+        output_name: Output filename (without extension)
+    """
+    print("🦴 Creating full body rigged GLB with complete kinematic chains...")
+    
+    # Create rigged exporter
+    exporter = RiggedGLBExporter(mjcf_path)
+    
+    # Set full body joints (this will use the create_full_body_rig logic)
+    full_body_joints = [
+        "waist_yaw_joint",
+        "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
+        "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+        "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint", 
+        "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+        "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+        "right_elbow_joint", "right_wrist_roll_joint",
+        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+        "left_elbow_joint", "left_wrist_roll_joint"
+    ]
+    
+    exporter.set_target_joints(full_body_joints)
+    exporter._build_bone_hierarchy()
+    exporter._assign_simple_weights()
+    
+    # Create GLTF builder
+    builder = GLTFArmatureBuilder(exporter)
+    
+    # Build and save
+    output_path = f"output/{output_name}.glb"
+    builder.build_rigged_gltf(output_path)
+    
+    print(f"\n✅ Full body rigged GLB created with {len(full_body_joints)} joints!")
+    print(f"   File: {output_path}")
+    print(f"🎯 Ready for Blender import with complete kinematic chains!")
+    print("   Features: waist → shoulders → elbows → wrists")
+    print("           : waist → hips → knees → ankles")
+
 def create_rigged_waist_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
                            output_name: str = "rigged_waist_robot") -> None:
     """

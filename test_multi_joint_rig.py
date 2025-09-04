@@ -8,11 +8,13 @@ the waist + right shoulder pitch combination and hierarchical joint discovery.
 from pathlib import Path
 from armature_exporter.rigged_glb_exporter import (
     create_waist_and_shoulder_rig, 
-    create_hierarchical_rig
+    create_hierarchical_rig,
+    create_full_body_rig
 )
 from armature_exporter.gltf_armature_builder import (
     create_rigged_waist_and_shoulder_glb,
-    create_rigged_hierarchical_glb
+    create_rigged_hierarchical_glb,
+    create_rigged_full_body_glb
 )
 
 
@@ -57,13 +59,38 @@ def test_hierarchical_joint_discovery():
         import traceback
         traceback.print_exc()
     
-    # Test 2: Full GLTF armature with hierarchy discovery
-    print("\n2️⃣  Testing Full GLTF Hierarchical Armature (3 joints max)...")
+    # Test 2: Full GLTF armature with hierarchy discovery (more joints to see the improvement)
+    print("\n2️⃣  Testing Full GLTF Hierarchical Armature (10 joints max)...")
     try:
-        create_rigged_hierarchical_glb(output_name="test_hierarchical_full", max_joints=3)
+        create_rigged_hierarchical_glb(output_name="test_hierarchical_full", max_joints=10)
         print("✅ Full GLTF hierarchical export successful")
     except Exception as e:
         print(f"❌ Full GLTF hierarchical export failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+def test_full_body_rig():
+    """Test the complete full body rig with all kinematic chains."""
+    print("\n🤖 Testing Complete Full Body Rig")
+    print("=" * 50)
+    
+    # Test 1: Simple exporter with all major joints
+    print("\n1️⃣  Testing Simple Full Body Exporter...")
+    try:
+        create_full_body_rig(output_name="test_full_body_simple")
+        print("✅ Simple full body export successful")
+    except Exception as e:
+        print(f"❌ Simple full body export failed: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    # Test 2: Full GLTF armature with complete kinematic chains
+    print("\n2️⃣  Testing Full GLTF Full Body Armature...")
+    try:
+        create_rigged_full_body_glb(output_name="test_full_body_full")
+        print("✅ Full GLTF full body export successful")
+    except Exception as e:
+        print(f"❌ Full GLTF full body export failed: {e}")
         import traceback
         traceback.print_exc()
 
@@ -80,6 +107,7 @@ def print_blender_test_instructions():
    • Try these files:
      - 'test_waist_shoulder_full.glb' (waist + right shoulder)
      - 'test_hierarchical_full.glb' (auto-discovered joints)
+     - 'test_full_body_full.glb' (complete kinematic chains)
 
 3. Verify the import:
    • Check the Outliner - you should see:
@@ -166,6 +194,9 @@ if __name__ == "__main__":
     # Test the hierarchical approach
     test_hierarchical_joint_discovery()
     
+    # Test the complete full body rig
+    test_full_body_rig()
+    
     # List all outputs
     list_output_files()
     
@@ -175,3 +206,4 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("🎉 Multi-joint rigging tests complete!")
     print("🎯 Next: Test the GLB files in Blender to verify joint functionality")
+    print("🚀 Recommended: Try 'test_full_body_full.glb' for complete kinematic chains!")
