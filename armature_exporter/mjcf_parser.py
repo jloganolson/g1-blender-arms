@@ -337,6 +337,56 @@ class MJCFParser:
         
         return global_position, global_rotation
     
+    def get_mesh_transforms_detailed(self) -> Dict[str, List[Tuple[str, np.ndarray, np.ndarray, Optional[str], Optional[Tuple[float, float, float]], Optional[Tuple[float, float, float, float]]]]]:
+        """
+        Get all mesh transformations with detailed geom info.
+        
+        Returns:
+            Dictionary mapping mesh_name to list of (body_name, global_position, global_rotation_matrix, material, geom_pos, geom_quat)
+        """
+        mesh_transforms = {}
+        
+        for body_name, body_info in self.bodies.items():
+            for geom_info in body_info.geometries:
+                if geom_info.mesh_name:
+                    # Compute global transform for the body
+                    global_pos, global_rot = self.compute_global_transform(body_name)
+                    
+                    # Store geom-specific transforms separately
+                    geom_pos = geom_info.position
+                    geom_quat = geom_info.quaternion
+                    
+                    # Apply geometry-specific transformation if present
+                    if geom_info.position or geom_info.quaternion:
+                        geom_pos_array = np.array(geom_info.position) if geom_info.position else np.zeros(3)
+                        geom_quat_tuple = geom_info.quaternion if geom_info.quaternion else (1.0, 0.0, 0.0, 0.0)
+                        
+                        # Convert geometry quaternion to rotation matrix
+                        geom_rotation = Rotation.from_quat([geom_quat_tuple[1], geom_quat_tuple[2], geom_quat_tuple[3], geom_quat_tuple[0]])
+                        geom_rot_matrix = geom_rotation.as_matrix()
+                        
+                        # Combine transformations
+                        final_pos = global_rot @ geom_pos_array + global_pos
+                        final_rot = global_rot @ geom_rot_matrix
+                    else:
+                        final_pos = global_pos
+                        final_rot = global_rot
+                    
+                    # Add to mesh transforms
+                    if geom_info.mesh_name not in mesh_transforms:
+                        mesh_transforms[geom_info.mesh_name] = []
+                    
+                    mesh_transforms[geom_info.mesh_name].append((
+                        body_name,
+                        final_pos,
+                        final_rot,
+                        geom_info.material,
+                        geom_pos,  # Original geom position
+                        geom_quat  # Original geom quaternion
+                    ))
+        
+        return mesh_transforms
+    
     def get_mesh_transforms(self) -> Dict[str, List[Tuple[str, np.ndarray, np.ndarray, Optional[str]]]]:
         """
         Get all mesh transformations organized by mesh name.

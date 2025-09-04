@@ -83,7 +83,6 @@ def print_blender_test_instructions():
 
 📄 Additional files created:
    • test_simple_rig.json - Rigging metadata for analysis
-   • PNG previews - Multi-view renders of the robot
 
 🚀 SUCCESS CRITERIA:
 The waist joint should allow you to pose the robot's upper body

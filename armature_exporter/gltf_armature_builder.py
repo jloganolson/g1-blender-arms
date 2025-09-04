@@ -143,29 +143,32 @@ class GLTFArmatureBuilder:
             min_vals=[int(faces.min())]
         )
         
-        # Add vertex weights if this mesh has bone weights
+        # Add vertex weights if this mesh instance has bone weights
         joint_accessor = None
         weight_accessor = None
         
-        if mesh_name in self.exporter.mesh_bone_weights:
-            weights = self.exporter.mesh_bone_weights[mesh_name]
-            if weights:
-                # Create joint and weight data for this mesh
-                joints, weight_values = self._create_vertex_weights(len(vertices), weights)
-                
-                # Add to buffer
-                joint_data = joints.astype(np.uint16).tobytes()
-                weight_data = weight_values.astype(np.float32).tobytes()
-                
-                joint_offset, joint_length = self._add_buffer_data(joint_data)
-                weight_offset, weight_length = self._add_buffer_data(weight_data)
-                
-                # Create buffer views and accessors
-                joint_buffer_view = self._create_buffer_view(0, joint_offset, joint_length, ARRAY_BUFFER)
-                weight_buffer_view = self._create_buffer_view(0, weight_offset, weight_length, ARRAY_BUFFER)
-                
-                joint_accessor = self._create_accessor(joint_buffer_view, UNSIGNED_SHORT, len(vertices), "VEC4")
-                weight_accessor = self._create_accessor(weight_buffer_view, FLOAT, len(vertices), "VEC4")
+        # Generate instance name to look up weights
+        # Note: mesh_name here is the original mesh name, we need to match the instance naming
+        # This will be set by the calling code that knows the instance name
+        instance_weights = getattr(self, '_current_instance_weights', {})
+        
+        if instance_weights:
+            # Create joint and weight data for this mesh instance
+            joints, weight_values = self._create_vertex_weights(len(vertices), instance_weights)
+            
+            # Add to buffer
+            joint_data = joints.astype(np.uint16).tobytes()
+            weight_data = weight_values.astype(np.float32).tobytes()
+            
+            joint_offset, joint_length = self._add_buffer_data(joint_data)
+            weight_offset, weight_length = self._add_buffer_data(weight_data)
+            
+            # Create buffer views and accessors
+            joint_buffer_view = self._create_buffer_view(0, joint_offset, joint_length, ARRAY_BUFFER)
+            weight_buffer_view = self._create_buffer_view(0, weight_offset, weight_length, ARRAY_BUFFER)
+            
+            joint_accessor = self._create_accessor(joint_buffer_view, UNSIGNED_SHORT, len(vertices), "VEC4")
+            weight_accessor = self._create_accessor(weight_buffer_view, FLOAT, len(vertices), "VEC4")
         
         # Create primitive
         attributes = {
@@ -240,24 +243,43 @@ class GLTFArmatureBuilder:
             # Create node for this joint
             node = Node(name=bone_name)
             
-            # Apply coordinate system correction to bone transform
+            # Apply coordinate system correction for Blender
             blender_correction = np.array([
                 [1,  0,  0,  0],  # X stays X
                 [0,  0,  1,  0],  # Y becomes Z 
                 [0, -1,  0,  0],  # Z becomes -Y
                 [0,  0,  0,  1]   # Translation unchanged
             ])
-            corrected_transform = blender_correction @ bone.transform_matrix
             
-            # Extract translation from corrected transform
-            translation = corrected_transform[:3, 3].tolist()
-            
-            # Set bone position at waist level (adjust for better placement)
-            if bone_name == "waist_yaw_joint":
-                # Position bone at waist connection point
-                translation[2] = 0.0  # At waist level after coordinate correction
+            # Calculate bone position relative to parent
+            if bone.parent_bone and bone.parent_bone in self.exporter.bones:
+                # Child bone: position relative to parent
+                parent_bone = self.exporter.bones[bone.parent_bone]
+                
+                # Get corrected global transforms (these already include all intermediate bodies)
+                corrected_bone_transform = blender_correction @ bone.transform_matrix
+                corrected_parent_transform = blender_correction @ parent_bone.transform_matrix
+                
+                # Calculate relative position: difference in world positions
+                # This works because the parser already computed global positions through all intermediate bodies
+                bone_world_pos = corrected_bone_transform[:3, 3]
+                parent_world_pos = corrected_parent_transform[:3, 3]
+                
+                # For GLTF bones, we need the local offset from parent to child
+                # Since both positions are in the same coordinate system, simple subtraction works
+                translation = (bone_world_pos - parent_world_pos).tolist()
+            else:
+                # Root bone: use world position
+                corrected_transform = blender_correction @ bone.transform_matrix
+                translation = corrected_transform[:3, 3].tolist()
+                
+                # Adjust root bone position for better placement
+                if bone_name == "waist_yaw_joint":
+                    translation[2] = 0.0  # At waist level after coordinate correction
             
             node.translation = translation
+            
+            # Keep bones simple - no rotation modifications needed
             
             # Set parent relationship
             if bone.parent_bone and bone.parent_bone in self.bone_to_joint_index:
@@ -320,7 +342,7 @@ class GLTFArmatureBuilder:
         
         # Add meshes
         print("Adding meshes...")
-        mesh_transforms = self.exporter.parser.get_mesh_transforms()
+        mesh_transforms = self.exporter.parser.get_mesh_transforms_detailed()
         
         for mesh_name, transforms in mesh_transforms.items():
             mesh_file_path = self.exporter.parser.get_mesh_file_path(mesh_name)
@@ -351,15 +373,20 @@ class GLTFArmatureBuilder:
                 continue
             
             # Add each transform instance
-            for i, (body_name, position, rotation_matrix, material) in enumerate(transforms):
+            for i, (body_name, position, rotation_matrix, material, geom_pos, geom_quat) in enumerate(transforms):
+                # Create instance name for weight lookup
+                instance_name = f"{body_name}_{mesh_name}"
+                if len(transforms) > 1:
+                    instance_name += f"_{i}"
+                
                 transform_matrix = np.eye(4)
                 transform_matrix[:3, :3] = rotation_matrix
                 transform_matrix[:3, 3] = position
                 
                 # For rigged meshes, adjust transform to be relative to bone
-                if mesh_name in self.exporter.mesh_bone_weights and self.exporter.mesh_bone_weights[mesh_name]:
-                    # This mesh is controlled by a bone - make transform relative to bone
-                    controlling_bones = list(self.exporter.mesh_bone_weights[mesh_name].keys())
+                if instance_name in self.exporter.mesh_instance_weights and self.exporter.mesh_instance_weights[instance_name]:
+                    # This mesh instance is controlled by a bone - make transform relative to bone
+                    controlling_bones = list(self.exporter.mesh_instance_weights[instance_name].keys())
                     if controlling_bones:
                         controlling_bone_name = controlling_bones[0]  # Use first controlling bone
                         if controlling_bone_name in self.exporter.bones:
@@ -382,25 +409,67 @@ class GLTFArmatureBuilder:
                                 # If bone transform is not invertible, use original transform
                                 pass
                 
-                # Add mesh to GLTF
+                # Set current instance weights for the mesh creation
+                if instance_name in self.exporter.mesh_instance_weights:
+                    self._current_instance_weights = self.exporter.mesh_instance_weights[instance_name]
+                else:
+                    self._current_instance_weights = {}
+                
+                # Create parent transform node for EVERY mesh (for independent positioning)
+                transform_node_name = f"{instance_name}_transform"
+                transform_node = Node(name=transform_node_name)
+                
+                self.gltf.nodes.append(transform_node)
+                transform_node_index = len(self.gltf.nodes) - 1
+                
+                # Add mesh to GLTF with the existing transform (which is already processed correctly)
                 mesh_index = self._add_mesh_to_gltf(mesh_name, mesh, transform_matrix)
                 
-                # Create mesh node
-                instance_name = f"{body_name}_{mesh_name}"
-                if len(transforms) > 1:
-                    instance_name += f"_{i}"
-                
+                # Create mesh node as child of transform node
                 mesh_node = Node(name=instance_name, mesh=mesh_index)
                 
+                # Apply geom-specific offsets to the mesh node if present
+                if geom_pos:
+                    # Apply coordinate correction to geom position
+                    blender_correction = np.array([
+                        [1,  0,  0,  0],  # X stays X
+                        [0,  0,  1,  0],  # Y becomes Z 
+                        [0, -1,  0,  0],  # Z becomes -Y
+                        [0,  0,  0,  1]   # Translation unchanged
+                    ])
+                    geom_pos_4d = np.array([*geom_pos, 1.0])
+                    corrected_geom_pos = (blender_correction @ geom_pos_4d)[:3]
+                    mesh_node.translation = corrected_geom_pos.tolist()
+                
+                if geom_quat:
+                    # Convert MJCF quaternion (w,x,y,z) to GLTF quaternion (x,y,z,w)
+                    # Apply coordinate correction
+                    from scipy.spatial.transform import Rotation
+                    geom_rotation = Rotation.from_quat([geom_quat[1], geom_quat[2], geom_quat[3], geom_quat[0]])  # MJCF w,x,y,z -> scipy x,y,z,w
+                    geom_rot_matrix = geom_rotation.as_matrix()
+                    
+                    # Apply Blender coordinate correction
+                    blender_correction_3x3 = np.array([
+                        [1,  0,  0],   # X stays X
+                        [0,  0,  1],   # Y becomes Z 
+                        [0, -1,  0]    # Z becomes -Y
+                    ])
+                    corrected_geom_rot = blender_correction_3x3 @ geom_rot_matrix @ blender_correction_3x3.T
+                    corrected_rotation = Rotation.from_matrix(corrected_geom_rot)
+                    mesh_node.rotation = corrected_rotation.as_quat().tolist()  # Returns x,y,z,w for GLTF
+                
                 # Add skin to mesh if it has weights
-                if mesh_name in self.exporter.mesh_bone_weights and self.exporter.mesh_bone_weights[mesh_name]:
+                if instance_name in self.exporter.mesh_instance_weights and self.exporter.mesh_instance_weights[instance_name]:
                     mesh_node.skin = skin_index
                 
                 self.gltf.nodes.append(mesh_node)
                 mesh_node_index = len(self.gltf.nodes) - 1
                 
-                # Add to scene
-                self.gltf.scenes[0].nodes.append(mesh_node_index)
+                # Make mesh a child of the transform node
+                transform_node.children = [mesh_node_index]
+                
+                # Add ONLY transform node to scene (mesh is its child, so doesn't need to be added separately)
+                self.gltf.scenes[0].nodes.append(transform_node_index)
         
         # Add armature root to scene
         if joint_nodes:
@@ -436,6 +505,67 @@ class GLTFArmatureBuilder:
         print(f"   Nodes: {len(self.gltf.nodes)}")
         print(f"   Buffer size: {len(self.buffer_data)} bytes")
 
+
+def create_rigged_waist_and_shoulder_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                                         output_name: str = "rigged_waist_shoulder") -> None:
+    """
+    Create a fully rigged GLB with waist and right shoulder pitch joints using proper GLTF armature.
+    
+    Args:
+        mjcf_path: Path to MJCF file
+        output_name: Output filename (without extension)
+    """
+    print("🦴 Creating rigged waist + right shoulder GLB with full armature support...")
+    
+    # Create rigged exporter
+    exporter = RiggedGLBExporter(mjcf_path)
+    exporter.set_target_joints([
+        "waist_yaw_joint",
+        "right_shoulder_pitch_joint"
+    ])
+    exporter._build_bone_hierarchy()
+    exporter._assign_simple_weights()
+    
+    # Create GLTF builder
+    builder = GLTFArmatureBuilder(exporter)
+    
+    # Build and save
+    output_path = f"output/{output_name}.glb"
+    builder.build_rigged_gltf(output_path)
+    
+    print(f"\n✅ Rigged waist + shoulder GLB created!")
+    print(f"   File: {output_path}")
+    print(f"🎯 Ready for Blender import with functional waist and shoulder joints!")
+
+def create_rigged_hierarchical_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                                  output_name: str = "rigged_hierarchical",
+                                  max_joints: int = 5) -> None:
+    """
+    Create a fully rigged GLB by auto-discovering joints from MJCF hierarchy.
+    
+    Args:
+        mjcf_path: Path to MJCF file
+        output_name: Output filename (without extension)
+        max_joints: Maximum number of joints to include from hierarchy
+    """
+    print(f"🦴 Creating hierarchical rigged GLB with up to {max_joints} joints...")
+    
+    # Create rigged exporter
+    exporter = RiggedGLBExporter(mjcf_path)
+    exporter.set_target_joints_from_hierarchy(max_joints=max_joints)
+    exporter._build_bone_hierarchy()
+    exporter._assign_simple_weights()
+    
+    # Create GLTF builder
+    builder = GLTFArmatureBuilder(exporter)
+    
+    # Build and save
+    output_path = f"output/{output_name}.glb"
+    builder.build_rigged_gltf(output_path)
+    
+    print(f"\n✅ Hierarchical rigged GLB created!")
+    print(f"   File: {output_path}")
+    print(f"🎯 Ready for Blender import with functional joint hierarchy!")
 
 def create_rigged_waist_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
                            output_name: str = "rigged_waist_robot") -> None:

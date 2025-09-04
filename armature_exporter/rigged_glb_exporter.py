@@ -13,7 +13,7 @@ import json
 from dataclasses import dataclass
 
 from .mjcf_parser import MJCFParser, JointInfo, BodyInfo
-from .utils_3d import load_stl, render_scene_multiview
+from .utils_3d import load_stl
 
 
 @dataclass
@@ -60,7 +60,7 @@ class RiggedGLBExporter:
         
         # Mesh data
         self.processed_meshes: Dict[str, trimesh.Trimesh] = {}
-        self.mesh_bone_weights: Dict[str, Dict[str, float]] = {}  # mesh_name -> {bone_name: weight}
+        self.mesh_instance_weights: Dict[str, Dict[str, float]] = {}  # instance_name -> {bone_name: weight}
         
         print(f"Initialized RiggedGLBExporter for {mjcf_path}")
         self._print_available_joints()
@@ -85,6 +85,71 @@ class RiggedGLBExporter:
         
         self.target_joints = joint_names
         print(f"Target joints set: {joint_names}")
+    
+    def auto_discover_joint_hierarchy(self, max_joints: Optional[int] = None) -> List[str]:
+        """
+        Automatically discover joint hierarchy from MJCF, starting from root joints.
+        This traverses the joint hierarchy in a sensible order for rigging.
+        
+        Args:
+            max_joints: Maximum number of joints to include (None for all)
+            
+        Returns:
+            List of joint names in hierarchical order
+        """
+        print("\n=== Auto-discovering Joint Hierarchy ===")
+        
+        # Get the joint hierarchy from parser
+        joint_hierarchy = self.parser.get_joint_hierarchy()
+        
+        # Find root joints (joints without parents)
+        root_joints = []
+        for joint_name, joint_info in joint_hierarchy.items():
+            if joint_info['parent_joint'] is None:
+                root_joints.append(joint_name)
+        
+        print(f"Found {len(root_joints)} root joints: {root_joints}")
+        
+        # Traverse hierarchy depth-first
+        discovered_joints = []
+        visited = set()
+        
+        def traverse_joint(joint_name: str, depth: int = 0):
+            if joint_name in visited or joint_name not in joint_hierarchy:
+                return
+            
+            visited.add(joint_name)
+            discovered_joints.append(joint_name)
+            
+            joint_info = joint_hierarchy[joint_name]
+            print(f"  {'  ' * depth}Found joint: {joint_name} ({joint_info['joint_type']})")
+            
+            # Find children of this joint
+            for child_joint_name, child_joint_info in joint_hierarchy.items():
+                if child_joint_info['parent_joint'] == joint_name:
+                    traverse_joint(child_joint_name, depth + 1)
+        
+        # Start traversal from root joints
+        for root_joint in root_joints:
+            traverse_joint(root_joint)
+        
+        # Limit number of joints if specified
+        if max_joints and len(discovered_joints) > max_joints:
+            discovered_joints = discovered_joints[:max_joints]
+            print(f"Limited to first {max_joints} joints")
+        
+        print(f"Discovered {len(discovered_joints)} joints in hierarchy: {discovered_joints}")
+        return discovered_joints
+    
+    def set_target_joints_from_hierarchy(self, max_joints: Optional[int] = None):
+        """
+        Set target joints by auto-discovering the joint hierarchy.
+        
+        Args:
+            max_joints: Maximum number of joints to include (None for all)
+        """
+        discovered_joints = self.auto_discover_joint_hierarchy(max_joints)
+        self.set_target_joints(discovered_joints)
     
     def _build_bone_hierarchy(self):
         """
@@ -118,12 +183,20 @@ class RiggedGLBExporter:
             
             body_info = self.parser.bodies[body_name]
             
-            # Determine parent bone
+            # Determine parent bone by traversing up the body hierarchy
             parent_bone = None
-            if body_info.parent:
-                parent_body = self.parser.bodies[body_info.parent]
-                if parent_body.joint and parent_body.joint.name in self.target_joints:
-                    parent_bone = parent_body.joint.name
+            current_parent = body_info.parent
+            
+            # Walk up the body hierarchy to find the nearest ancestor with a joint in target_joints
+            while current_parent and parent_bone is None:
+                if current_parent in self.parser.bodies:
+                    parent_body = self.parser.bodies[current_parent]
+                    if parent_body.joint and parent_body.joint.name in self.target_joints:
+                        parent_bone = parent_body.joint.name
+                        break
+                    current_parent = parent_body.parent
+                else:
+                    break
             
             # Create bone
             bone = BoneInfo(
@@ -177,8 +250,8 @@ class RiggedGLBExporter:
     
     def _assign_simple_weights(self):
         """
-        Assign simple vertex weights for skinning.
-        For the waist joint, we'll use a simple distance-based weighting scheme.
+        Assign simple vertex weights for skinning based on mesh instances.
+        Each mesh instance gets weights based on its specific body's controlling joint.
         """
         print("\n=== Assigning Vertex Weights ===")
         
@@ -192,14 +265,14 @@ class RiggedGLBExporter:
         for mesh_name, transforms in mesh_transforms.items():
             print(f"  Processing mesh: {mesh_name}")
             
-            # For this simple implementation, we'll assign weights based on
-            # which body the mesh belongs to and the joint hierarchy
-            
-            weights = {}
-            
-            # For each transform (mesh instance)
-            for body_name, position, rotation_matrix, material in transforms:
-                # Find the joint that controls this body
+            # For each transform (mesh instance), assign weights independently
+            for i, (body_name, position, rotation_matrix, material) in enumerate(transforms):
+                # Create unique instance name
+                instance_name = f"{body_name}_{mesh_name}"
+                if len(transforms) > 1:
+                    instance_name += f"_{i}"
+                
+                # Find the joint that controls this specific body
                 controlling_joint = None
                 
                 # Look for joint in this body or parent bodies
@@ -214,19 +287,17 @@ class RiggedGLBExporter:
                     else:
                         break
                 
+                # Assign weights for this specific instance
+                instance_weights = {}
                 if controlling_joint:
-                    # For now, assign 100% weight to the controlling joint
-                    weights[controlling_joint] = 1.0
-                    print(f"    Body {body_name} -> Joint {controlling_joint} (weight: 1.0)")
+                    # Assign 100% weight to the controlling joint for this instance
+                    instance_weights[controlling_joint] = 1.0
+                    print(f"    Instance {instance_name} -> Joint {controlling_joint} (weight: 1.0)")
                 else:
-                    print(f"    Body {body_name} -> No controlling joint found")
-            
-            # Normalize weights
-            total_weight = sum(weights.values())
-            if total_weight > 0:
-                weights = {k: v/total_weight for k, v in weights.items()}
-            
-            self.mesh_bone_weights[mesh_name] = weights
+                    print(f"    Instance {instance_name} -> No controlling joint found")
+                
+                # Store weights for this specific instance
+                self.mesh_instance_weights[instance_name] = instance_weights
     
     def export_rigged_glb(self, output_path: str, single_joint: Optional[str] = None) -> None:
         """
@@ -275,10 +346,6 @@ class RiggedGLBExporter:
         
         print(f"📄 Rigging metadata saved: {metadata_path}")
         print("🚧 Note: Full armature support coming in next iteration!")
-        
-        # Render preview
-        preview_path = output_path.with_suffix('.png')
-        render_scene_multiview(scene, "Rigged Robot", preview_path)
     
     def _export_basic_glb(self, output_path: str) -> None:
         """Export basic GLB without rigging (fallback)."""
@@ -348,8 +415,8 @@ class RiggedGLBExporter:
             "source_mjcf": str(self.mjcf_path),
             "target_joints": self.target_joints,
             "bones": {},
-            "mesh_weights": self.mesh_bone_weights,
-            "notes": "This metadata describes the intended rigging structure. Full GLB armature support coming soon!"
+            "mesh_instance_weights": self.mesh_instance_weights,
+            "notes": "This metadata describes the intended rigging structure. Weights are now per-instance to handle shared meshes correctly."
         }
         
         # Add bone information
@@ -381,10 +448,72 @@ class RiggedGLBExporter:
             if bone.joint_info:
                 print(f"    Joint: {bone.joint_info.type}, axis={bone.joint_info.axis}")
         
-        print("\nMesh weights:")
-        for mesh_name, weights in self.mesh_bone_weights.items():
-            print(f"  {mesh_name}: {weights}")
+        print("\nMesh instance weights:")
+        for instance_name, weights in self.mesh_instance_weights.items():
+            print(f"  {instance_name}: {weights}")
 
+
+def create_waist_and_shoulder_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                                  output_name: str = "rigged_waist_shoulder") -> None:
+    """
+    Create a rigged GLB with waist and right shoulder pitch joints.
+    
+    Args:
+        mjcf_path: Path to MJCF file
+        output_name: Output filename (without extension)
+    """
+    print("🦴 Creating waist + right shoulder rig...")
+    
+    # Create rigged exporter
+    exporter = RiggedGLBExporter(mjcf_path)
+    
+    # Set multiple target joints as shown in the implementation summary
+    exporter.set_target_joints([
+        "waist_yaw_joint",
+        "right_shoulder_pitch_joint"
+    ])
+    
+    # Export the rigged GLB
+    output_path = f"output/{output_name}.glb"
+    exporter.export_rigged_glb(output_path)
+    
+    # Print summary
+    exporter.print_rigging_summary()
+    
+    print(f"\n✅ Waist + Right Shoulder rig created!")
+    print(f"   GLB: {output_path}")
+    print(f"   Metadata: {output_path.replace('.glb', '.json')}")
+
+def create_hierarchical_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                           output_name: str = "rigged_hierarchical",
+                           max_joints: int = 5) -> None:
+    """
+    Create a rigged GLB by auto-discovering joints from the MJCF hierarchy.
+    This is the "traversing the MJCF for joints" approach you requested.
+    
+    Args:
+        mjcf_path: Path to MJCF file
+        output_name: Output filename (without extension)
+        max_joints: Maximum number of joints to include from hierarchy
+    """
+    print(f"🦴 Creating hierarchical rig with up to {max_joints} joints...")
+    
+    # Create rigged exporter
+    exporter = RiggedGLBExporter(mjcf_path)
+    
+    # Auto-discover joints from hierarchy (this is the main feature you requested)
+    exporter.set_target_joints_from_hierarchy(max_joints=max_joints)
+    
+    # Export the rigged GLB
+    output_path = f"output/{output_name}.glb"
+    exporter.export_rigged_glb(output_path)
+    
+    # Print summary
+    exporter.print_rigging_summary()
+    
+    print(f"\n✅ Hierarchical rig created!")
+    print(f"   GLB: {output_path}")
+    print(f"   Metadata: {output_path.replace('.glb', '.json')}")
 
 def create_simple_waist_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
                            output_name: str = "rigged_robot") -> None:
@@ -410,7 +539,6 @@ def create_simple_waist_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml",
     print(f"\n✅ Simple waist rig created!")
     print(f"   GLB: {output_path}")
     print(f"   Metadata: {output_path.replace('.glb', '.json')}")
-    print(f"   Preview: {output_path.replace('.glb', '.png')}")
 
 
 if __name__ == "__main__":
