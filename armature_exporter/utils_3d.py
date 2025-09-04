@@ -367,6 +367,83 @@ def multi_stl_to_glb(
     return scene
 
 
+def mjcf_to_glb(mjcf_path: Union[str, Path], output_path: Union[str, Path], 
+                simplify: bool = True, max_faces_per_mesh: int = 5000) -> trimesh.Scene:
+    """
+    Export MJCF robot model to GLB format (meshes only, no rigging).
+    
+    Args:
+        mjcf_path: Path to MJCF file
+        output_path: Path to save GLB file
+        simplify: Whether to simplify meshes for smaller file size
+        max_faces_per_mesh: Maximum faces per mesh when simplifying
+        
+    Returns:
+        The created trimesh.Scene object
+    """
+    from .mjcf_parser import MJCFParser
+    
+    print(f"Converting MJCF to GLB: {mjcf_path} -> {output_path}")
+    
+    # Parse MJCF
+    parser = MJCFParser(mjcf_path)
+    mesh_transforms = parser.get_mesh_transforms()
+    
+    print(f"Found {len(mesh_transforms)} unique meshes")
+    
+    # Create scene
+    scene = trimesh.Scene()
+    processed_meshes = {}
+    
+    # Process each mesh
+    for mesh_name, transforms in mesh_transforms.items():
+        print(f"  Processing {mesh_name}...")
+        
+        # Get mesh file path
+        mesh_file_path = parser.get_mesh_file_path(mesh_name)
+        if mesh_file_path is None or not mesh_file_path.exists():
+            print(f"    Warning: Skipping missing mesh {mesh_name}")
+            continue
+        
+        # Load mesh (cache it if we haven't loaded it before)
+        if mesh_name not in processed_meshes:
+            try:
+                mesh = load_stl(mesh_file_path)
+                
+                # Simplify mesh if requested
+                if simplify and len(mesh.faces) > max_faces_per_mesh:
+                    print(f"    Simplifying {mesh_name}: {len(mesh.faces)} -> {max_faces_per_mesh} faces")
+                    mesh = mesh.simplify_quadric_decimation(face_count=max_faces_per_mesh)
+                
+                processed_meshes[mesh_name] = mesh
+            except Exception as e:
+                print(f"    Error loading {mesh_name}: {e}")
+                continue
+        
+        base_mesh = processed_meshes[mesh_name]
+        
+        # Add transformed instances to scene
+        for i, (body_name, position, rotation_matrix, material) in enumerate(transforms):
+            # Apply transform
+            transform_matrix = np.eye(4)
+            transform_matrix[:3, :3] = rotation_matrix
+            transform_matrix[:3, 3] = position
+            
+            transformed_mesh = base_mesh.copy()
+            transformed_mesh.apply_transform(transform_matrix)
+            
+            instance_name = f"{body_name}_{mesh_name}"
+            if len(transforms) > 1:
+                instance_name += f"_{i}"
+            scene.add_geometry(transformed_mesh, node_name=instance_name)
+    
+    # Export to GLB
+    export_scene_to_glb(scene, output_path)
+    
+    print(f"✅ MJCF exported to GLB: {output_path}")
+    return scene
+
+
 def render_scene_multiview(scene: trimesh.Scene, title: str = "Multi-View Scene", 
                           save_path: Optional[Union[str, Path]] = None,
                           view_size: int = 512, colorful: bool = True, 

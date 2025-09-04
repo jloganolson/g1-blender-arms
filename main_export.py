@@ -5,7 +5,7 @@ Test script for the simplified rigged/unrigged GLB export system.
 """
 
 from pathlib import Path
-from armature_exporter.rigged_glb_exporter import create_unrigged_glb, create_rigged_glb
+from armature_exporter.utils_3d import mjcf_to_glb
 from armature_exporter.gltf_armature_builder import create_rigged_full_body_glb
 
 
@@ -15,7 +15,9 @@ def test_unrigged_export():
     print("=" * 40)
     
     try:
-        create_unrigged_glb(output_name="robot_unrigged")
+        mjcf_path = "./g1_description/g1_mjx_alt.xml"
+        output_path = "output/robot_unrigged.glb"
+        mjcf_to_glb(mjcf_path, output_path)
         print("✅ Unrigged export successful")
     except Exception as e:
         print(f"❌ Unrigged export failed: {e}")

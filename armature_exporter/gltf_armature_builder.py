@@ -25,7 +25,25 @@ except ImportError:
     PYGLTFLIB_AVAILABLE = False
     print("Warning: pygltflib not available. Install with: uv pip install pygltflib")
 
-from .rigged_glb_exporter import RiggedGLBExporter, BoneInfo
+from .mjcf_parser import MJCFParser, JointInfo
+from dataclasses import dataclass
+
+
+@dataclass
+class BoneInfo:
+    """Information about a bone in the armature."""
+    name: str
+    parent_bone: Optional[str] = None
+    joint_info: Optional[JointInfo] = None
+    body_name: str = ""
+    transform_matrix: np.ndarray = None
+    children: List[str] = None
+    
+    def __post_init__(self):
+        if self.children is None:
+            self.children = []
+        if self.transform_matrix is None:
+            self.transform_matrix = np.eye(4)
 
 
 class GLTFArmatureBuilder:
@@ -34,12 +52,16 @@ class GLTFArmatureBuilder:
     This creates GLB files that can be imported into Blender with working rigs.
     """
     
-    def __init__(self, rigged_exporter: RiggedGLBExporter):
-        """Initialize with a rigged exporter containing the bone structure."""
+    def __init__(self, mjcf_parser: MJCFParser, bones: Dict[str, BoneInfo], 
+                 bone_hierarchy: List[str], mesh_instance_weights: Dict[str, Dict[str, float]]):
+        """Initialize with bone structure data."""
         if not PYGLTFLIB_AVAILABLE:
             raise ImportError("pygltflib is required. Install with: uv pip install pygltflib")
         
-        self.exporter = rigged_exporter
+        self.parser = mjcf_parser
+        self.bones = bones
+        self.bone_hierarchy = bone_hierarchy
+        self.mesh_instance_weights = mesh_instance_weights
         self.gltf = GLTF2()
         
         # Buffers and accessors
@@ -237,8 +259,8 @@ class GLTFArmatureBuilder:
         joint_nodes = []
         
         # Create nodes for each bone in hierarchy order
-        for bone_name in self.exporter.bone_hierarchy:
-            bone = self.exporter.bones[bone_name]
+        for bone_name in self.bone_hierarchy:
+            bone = self.bones[bone_name]
             
             # Create node for this joint
             node = Node(name=bone_name)
@@ -252,9 +274,9 @@ class GLTFArmatureBuilder:
             ])
             
             # Calculate bone position relative to parent
-            if bone.parent_bone and bone.parent_bone in self.exporter.bones:
+            if bone.parent_bone and bone.parent_bone in self.bones:
                 # Child bone: position relative to parent
-                parent_bone = self.exporter.bones[bone.parent_bone]
+                parent_bone = self.bones[bone.parent_bone]
                 
                 # Get corrected global transforms (these already include all intermediate bodies)
                 corrected_bone_transform = blender_correction @ bone.transform_matrix
@@ -342,10 +364,10 @@ class GLTFArmatureBuilder:
         
         # Add meshes
         print("Adding meshes...")
-        mesh_transforms = self.exporter.parser.get_mesh_transforms_detailed()
+        mesh_transforms = self.parser.get_mesh_transforms_detailed()
         
         for mesh_name, transforms in mesh_transforms.items():
-            mesh_file_path = self.exporter.parser.get_mesh_file_path(mesh_name)
+            mesh_file_path = self.parser.get_mesh_file_path(mesh_name)
             if mesh_file_path is None or not mesh_file_path.exists():
                 continue
             
@@ -384,13 +406,13 @@ class GLTFArmatureBuilder:
                 transform_matrix[:3, 3] = position
                 
                 # For rigged meshes, adjust transform to be relative to bone
-                if instance_name in self.exporter.mesh_instance_weights and self.exporter.mesh_instance_weights[instance_name]:
+                if instance_name in self.mesh_instance_weights and self.mesh_instance_weights[instance_name]:
                     # This mesh instance is controlled by a bone - make transform relative to bone
-                    controlling_bones = list(self.exporter.mesh_instance_weights[instance_name].keys())
+                    controlling_bones = list(self.mesh_instance_weights[instance_name].keys())
                     if controlling_bones:
                         controlling_bone_name = controlling_bones[0]  # Use first controlling bone
-                        if controlling_bone_name in self.exporter.bones:
-                            bone = self.exporter.bones[controlling_bone_name]
+                        if controlling_bone_name in self.bones:
+                            bone = self.bones[controlling_bone_name]
                             
                             # Get bone transform (with coordinate correction)
                             blender_correction = np.array([
@@ -410,8 +432,8 @@ class GLTFArmatureBuilder:
                                 pass
                 
                 # Set current instance weights for the mesh creation
-                if instance_name in self.exporter.mesh_instance_weights:
-                    self._current_instance_weights = self.exporter.mesh_instance_weights[instance_name]
+                if instance_name in self.mesh_instance_weights:
+                    self._current_instance_weights = self.mesh_instance_weights[instance_name]
                 else:
                     self._current_instance_weights = {}
                 
@@ -459,7 +481,7 @@ class GLTFArmatureBuilder:
                     mesh_node.rotation = corrected_rotation.as_quat().tolist()  # Returns x,y,z,w for GLTF
                 
                 # Add skin to mesh if it has weights
-                if instance_name in self.exporter.mesh_instance_weights and self.exporter.mesh_instance_weights[instance_name]:
+                if instance_name in self.mesh_instance_weights and self.mesh_instance_weights[instance_name]:
                     mesh_node.skin = skin_index
                 
                 self.gltf.nodes.append(mesh_node)
@@ -475,8 +497,8 @@ class GLTFArmatureBuilder:
         if joint_nodes:
             # Find root joints (those without parents)
             root_joints = []
-            for bone_name in self.exporter.bone_hierarchy:
-                bone = self.exporter.bones[bone_name]
+            for bone_name in self.bone_hierarchy:
+                bone = self.bones[bone_name]
                 if bone.parent_bone is None:
                     root_joints.append(self.bone_to_joint_index[bone_name])
             
@@ -506,8 +528,136 @@ class GLTFArmatureBuilder:
         print(f"   Buffer size: {len(self.buffer_data)} bytes")
 
 
+def build_bone_hierarchy(parser: MJCFParser, target_joints: List[str]) -> Tuple[Dict[str, BoneInfo], List[str], Dict[str, Dict[str, float]]]:
+    """
+    Build bone hierarchy from MJCF joint data.
+    
+    Args:
+        parser: MJCF parser instance
+        target_joints: List of joint names to include
+        
+    Returns:
+        Tuple of (bones dict, bone hierarchy list, mesh instance weights)
+    """
+    bones = {}
+    mesh_instance_weights = {}
+    
+    # Create bones for target joints
+    for joint_name in target_joints:
+        joint_info = parser.joints[joint_name]
+        
+        # Find the body that contains this joint
+        body_name = None
+        for body_name_candidate, body_info in parser.bodies.items():
+            if body_info.joint and body_info.joint.name == joint_name:
+                body_name = body_name_candidate
+                break
+        
+        if body_name is None:
+            print(f"Warning: Could not find body for joint {joint_name}")
+            continue
+        
+        body_info = parser.bodies[body_name]
+        
+        # Determine parent bone by traversing up the body hierarchy
+        parent_bone = None
+        current_parent = body_info.parent
+        
+        # Walk up the body hierarchy to find the nearest ancestor with a joint in target_joints
+        while current_parent and parent_bone is None:
+            if current_parent in parser.bodies:
+                parent_body = parser.bodies[current_parent]
+                if parent_body.joint and parent_body.joint.name in target_joints:
+                    parent_bone = parent_body.joint.name
+                    break
+                current_parent = parent_body.parent
+            else:
+                break
+        
+        # Calculate bone transform (position in world space)
+        global_pos, global_rot = parser.compute_global_transform(body_name)
+        transform_matrix = np.eye(4)
+        transform_matrix[:3, :3] = global_rot
+        transform_matrix[:3, 3] = global_pos
+        
+        # Create bone
+        bone = BoneInfo(
+            name=joint_name,
+            parent_bone=parent_bone,
+            joint_info=joint_info,
+            body_name=body_name,
+            transform_matrix=transform_matrix
+        )
+        
+        bones[joint_name] = bone
+    
+    # Build hierarchy order (root to leaf)
+    bone_hierarchy = []
+    visited = set()
+    
+    def visit_bone(bone_name: str):
+        if bone_name in visited or bone_name not in bones:
+            return
+        
+        bone = bones[bone_name]
+        # Visit parent first
+        if bone.parent_bone and bone.parent_bone not in visited:
+            visit_bone(bone.parent_bone)
+        
+        # Add this bone
+        if bone_name not in visited:
+            bone_hierarchy.append(bone_name)
+            visited.add(bone_name)
+    
+    # Start with all bones (will visit in proper order)
+    for bone_name in bones.keys():
+        visit_bone(bone_name)
+    
+    # Set up parent-child relationships
+    for bone_name, bone in bones.items():
+        if bone.parent_bone and bone.parent_bone in bones:
+            bones[bone.parent_bone].children.append(bone_name)
+    
+    # Assign simple vertex weights
+    mesh_transforms = parser.get_mesh_transforms()
+    
+    for mesh_name, transforms in mesh_transforms.items():
+        # For each transform (mesh instance), assign weights independently
+        for i, (body_name, position, rotation_matrix, material) in enumerate(transforms):
+            # Create unique instance name
+            instance_name = f"{body_name}_{mesh_name}"
+            if len(transforms) > 1:
+                instance_name += f"_{i}"
+            
+            # Find the joint that controls this specific body
+            controlling_joint = None
+            
+            # Look for joint in this body or parent bodies
+            current_body = body_name
+            while current_body and controlling_joint is None:
+                if current_body in parser.bodies:
+                    body_info = parser.bodies[current_body]
+                    if body_info.joint and body_info.joint.name in target_joints:
+                        controlling_joint = body_info.joint.name
+                        break
+                    current_body = body_info.parent
+                else:
+                    break
+            
+            # Assign weights for this specific instance
+            instance_weights = {}
+            if controlling_joint:
+                # Assign 100% weight to the controlling joint for this instance
+                instance_weights[controlling_joint] = 1.0
+            
+            # Store weights for this specific instance
+            mesh_instance_weights[instance_name] = instance_weights
+    
+    return bones, bone_hierarchy, mesh_instance_weights
+
+
 def create_rigged_full_body_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                               output_name: str = "robot_rigged_full") -> None:
+                               output_name: str = "robot_rigged") -> None:
     """
     Create a fully rigged GLB with complete kinematic chains to ankles and forearms.
     This creates a comprehensive rig suitable for full body animation.
@@ -518,10 +668,10 @@ def create_rigged_full_body_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xm
     """
     print("🦴 Creating full body rigged GLB with complete kinematic chains...")
     
-    # Create rigged exporter
-    exporter = RiggedGLBExporter(mjcf_path)
+    # Parse MJCF
+    parser = MJCFParser(mjcf_path)
     
-    # Set full body joints (this will use the create_full_body_rig logic)
+    # Set full body joints
     full_body_joints = [
         "waist_yaw_joint",
         "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
@@ -534,12 +684,11 @@ def create_rigged_full_body_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xm
         "left_elbow_joint", "left_wrist_roll_joint"
     ]
     
-    exporter.set_target_joints(full_body_joints)
-    exporter._build_bone_hierarchy()
-    exporter._assign_simple_weights()
+    # Build bone hierarchy
+    bones, bone_hierarchy, mesh_instance_weights = build_bone_hierarchy(parser, full_body_joints)
     
     # Create GLTF builder
-    builder = GLTFArmatureBuilder(exporter)
+    builder = GLTFArmatureBuilder(parser, bones, bone_hierarchy, mesh_instance_weights)
     
     # Build and save
     output_path = f"output/{output_name}.glb"
@@ -547,9 +696,11 @@ def create_rigged_full_body_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xm
     
     print(f"\n✅ Full rigged GLB created with {len(full_body_joints)} joints!")
     print(f"   File: {output_path}")
-    print(f"🎯 Ready for Blender import with complete kinematic chains!")
-    print("   Features: waist → shoulders → elbows → wrists")
-    print("           : waist → hips → knees → ankles")
+    print(f"   Size: {Path(output_path).stat().st_size / (1024*1024):.1f} MB")
+    print("🎯 Complete kinematic chains: waist → shoulders → elbows → wrists")
+    print("                            : waist → hips → knees → ankles")
+    print("🦴 Armature: Full GLTF armature with proper skinning")
+    print("📋 Ready for Blender import and animation!")
 
 
 if __name__ == "__main__":
