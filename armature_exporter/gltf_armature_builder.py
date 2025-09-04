@@ -506,69 +506,8 @@ class GLTFArmatureBuilder:
         print(f"   Buffer size: {len(self.buffer_data)} bytes")
 
 
-def create_rigged_waist_and_shoulder_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                                         output_name: str = "rigged_waist_shoulder") -> None:
-    """
-    Create a fully rigged GLB with waist and right shoulder pitch joints using proper GLTF armature.
-    
-    Args:
-        mjcf_path: Path to MJCF file
-        output_name: Output filename (without extension)
-    """
-    print("🦴 Creating rigged waist + right shoulder GLB with full armature support...")
-    
-    # Create rigged exporter
-    exporter = RiggedGLBExporter(mjcf_path)
-    exporter.set_target_joints([
-        "waist_yaw_joint",
-        "right_shoulder_pitch_joint"
-    ])
-    exporter._build_bone_hierarchy()
-    exporter._assign_simple_weights()
-    
-    # Create GLTF builder
-    builder = GLTFArmatureBuilder(exporter)
-    
-    # Build and save
-    output_path = f"output/{output_name}.glb"
-    builder.build_rigged_gltf(output_path)
-    
-    print(f"\n✅ Rigged waist + shoulder GLB created!")
-    print(f"   File: {output_path}")
-    print(f"🎯 Ready for Blender import with functional waist and shoulder joints!")
-
-def create_rigged_hierarchical_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                                  output_name: str = "rigged_hierarchical",
-                                  max_joints: int = 5) -> None:
-    """
-    Create a fully rigged GLB by auto-discovering joints from MJCF hierarchy.
-    
-    Args:
-        mjcf_path: Path to MJCF file
-        output_name: Output filename (without extension)
-        max_joints: Maximum number of joints to include from hierarchy
-    """
-    print(f"🦴 Creating hierarchical rigged GLB with up to {max_joints} joints...")
-    
-    # Create rigged exporter
-    exporter = RiggedGLBExporter(mjcf_path)
-    exporter.set_target_joints_from_hierarchy(max_joints=max_joints)
-    exporter._build_bone_hierarchy()
-    exporter._assign_simple_weights()
-    
-    # Create GLTF builder
-    builder = GLTFArmatureBuilder(exporter)
-    
-    # Build and save
-    output_path = f"output/{output_name}.glb"
-    builder.build_rigged_gltf(output_path)
-    
-    print(f"\n✅ Hierarchical rigged GLB created!")
-    print(f"   File: {output_path}")
-    print(f"🎯 Ready for Blender import with functional joint hierarchy!")
-
 def create_rigged_full_body_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                               output_name: str = "rigged_full_body") -> None:
+                               output_name: str = "robot_rigged_full") -> None:
     """
     Create a fully rigged GLB with complete kinematic chains to ankles and forearms.
     This creates a comprehensive rig suitable for full body animation.
@@ -606,41 +545,13 @@ def create_rigged_full_body_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xm
     output_path = f"output/{output_name}.glb"
     builder.build_rigged_gltf(output_path)
     
-    print(f"\n✅ Full body rigged GLB created with {len(full_body_joints)} joints!")
+    print(f"\n✅ Full rigged GLB created with {len(full_body_joints)} joints!")
     print(f"   File: {output_path}")
     print(f"🎯 Ready for Blender import with complete kinematic chains!")
     print("   Features: waist → shoulders → elbows → wrists")
     print("           : waist → hips → knees → ankles")
 
-def create_rigged_waist_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                           output_name: str = "rigged_waist_robot") -> None:
-    """
-    Create a fully rigged GLB with waist joint using proper GLTF armature.
-    
-    Args:
-        mjcf_path: Path to MJCF file
-        output_name: Output filename (without extension)
-    """
-    print("🦴 Creating rigged waist GLB with full armature support...")
-    
-    # Create rigged exporter
-    exporter = RiggedGLBExporter(mjcf_path)
-    exporter.set_target_joints(["waist_yaw_joint"])
-    exporter._build_bone_hierarchy()
-    exporter._assign_simple_weights()
-    
-    # Create GLTF builder
-    builder = GLTFArmatureBuilder(exporter)
-    
-    # Build and save
-    output_path = f"output/{output_name}.glb"
-    builder.build_rigged_gltf(output_path)
-    
-    print(f"\n✅ Rigged waist GLB created!")
-    print(f"   File: {output_path}")
-    print(f"🎯 Ready for Blender import with functional waist joint!")
-
 
 if __name__ == "__main__":
-    # Create rigged waist GLB
-    create_rigged_waist_glb()
+    # Create full rigged GLB
+    create_rigged_full_body_glb()

@@ -453,85 +453,45 @@ class RiggedGLBExporter:
             print(f"  {instance_name}: {weights}")
 
 
-def create_waist_and_shoulder_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                                  output_name: str = "rigged_waist_shoulder") -> None:
+def create_unrigged_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                       output_name: str = "robot_unrigged") -> None:
     """
-    Create a rigged GLB with waist and right shoulder pitch joints.
+    Create an unrigged GLB with just meshes (no armature/bones).
+    This is useful for static models or when you just need the geometry.
     
     Args:
         mjcf_path: Path to MJCF file
         output_name: Output filename (without extension)
     """
-    print("🦴 Creating waist + right shoulder rig...")
+    print("📦 Creating unrigged GLB (meshes only)...")
     
-    # Create rigged exporter
+    # Create rigged exporter but don't set any joints
     exporter = RiggedGLBExporter(mjcf_path)
     
-    # Set multiple target joints as shown in the implementation summary
-    exporter.set_target_joints([
-        "waist_yaw_joint",
-        "right_shoulder_pitch_joint"
-    ])
-    
-    # Export the rigged GLB
+    # Export without any joints (will use basic GLB export)
     output_path = f"output/{output_name}.glb"
     exporter.export_rigged_glb(output_path)
     
-    # Print summary
-    exporter.print_rigging_summary()
-    
-    print(f"\n✅ Waist + Right Shoulder rig created!")
+    print(f"\n✅ Unrigged GLB created!")
     print(f"   GLB: {output_path}")
-    print(f"   Metadata: {output_path.replace('.glb', '.json')}")
+    print("   Contains: All robot meshes without armature")
 
-def create_hierarchical_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                           output_name: str = "rigged_hierarchical",
-                           max_joints: int = 5) -> None:
-    """
-    Create a rigged GLB by auto-discovering joints from the MJCF hierarchy.
-    This is the "traversing the MJCF for joints" approach you requested.
-    
-    Args:
-        mjcf_path: Path to MJCF file
-        output_name: Output filename (without extension)
-        max_joints: Maximum number of joints to include from hierarchy
-    """
-    print(f"🦴 Creating hierarchical rig with up to {max_joints} joints...")
-    
-    # Create rigged exporter
-    exporter = RiggedGLBExporter(mjcf_path)
-    
-    # Auto-discover joints from hierarchy (this is the main feature you requested)
-    exporter.set_target_joints_from_hierarchy(max_joints=max_joints)
-    
-    # Export the rigged GLB
-    output_path = f"output/{output_name}.glb"
-    exporter.export_rigged_glb(output_path)
-    
-    # Print summary
-    exporter.print_rigging_summary()
-    
-    print(f"\n✅ Hierarchical rig created!")
-    print(f"   GLB: {output_path}")
-    print(f"   Metadata: {output_path.replace('.glb', '.json')}")
-
-def create_full_body_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                        output_name: str = "rigged_full_body") -> None:
+def create_rigged_glb(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
+                     output_name: str = "robot_rigged") -> None:
     """
     Create a rigged GLB with complete kinematic chains to ankles and forearms.
-    This includes all major joints in both legs and arms.
+    This includes all major joints in both legs and arms with full armature support.
     
     Args:
         mjcf_path: Path to MJCF file
         output_name: Output filename (without extension)
     """
-    print("🦴 Creating full body rig with complete kinematic chains...")
+    print("🦴 Creating rigged GLB with complete kinematic chains...")
     
     # Create rigged exporter
     exporter = RiggedGLBExporter(mjcf_path)
     
-    # Manually select key joints for full body coverage
-    # Excludes floating_base_joint (which is usually not needed for rigging)
+    # Full body joints for complete kinematic chains
     full_body_joints = [
         # Waist
         "waist_yaw_joint",
@@ -569,45 +529,21 @@ def create_full_body_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml",
     
     exporter.set_target_joints(full_body_joints)
     
-    # Export the rigged GLB
+    # Export the rigged GLB (this will export basic GLB + metadata)
     output_path = f"output/{output_name}.glb"
     exporter.export_rigged_glb(output_path)
     
     # Print summary
     exporter.print_rigging_summary()
     
-    print(f"\n✅ Full body rig created with {len(full_body_joints)} joints!")
+    print(f"\n✅ Rigged GLB created with {len(full_body_joints)} joints!")
     print(f"   GLB: {output_path}")
     print(f"   Metadata: {output_path.replace('.glb', '.json')}")
     print("🎯 Complete kinematic chains: waist → shoulders → elbows → wrists")
     print("                            : waist → hips → knees → ankles")
-
-def create_simple_waist_rig(mjcf_path: str = "./g1_description/g1_mjx_alt.xml", 
-                           output_name: str = "rigged_robot") -> None:
-    """
-    Create a simple rigged GLB with just the waist joint.
-    
-    Args:
-        mjcf_path: Path to MJCF file
-        output_name: Output filename (without extension)
-    """
-    print("🦴 Creating simple waist rig...")
-    
-    # Create rigged exporter
-    exporter = RiggedGLBExporter(mjcf_path)
-    
-    # Export with waist joint
-    output_path = f"output/{output_name}.glb"
-    exporter.export_rigged_glb(output_path, single_joint="waist_yaw_joint")
-    
-    # Print summary
-    exporter.print_rigging_summary()
-    
-    print(f"\n✅ Simple waist rig created!")
-    print(f"   GLB: {output_path}")
-    print(f"   Metadata: {output_path.replace('.glb', '.json')}")
+    print("📝 Note: Use create_rigged_full_body_glb() for full armature support")
 
 
 if __name__ == "__main__":
-    # Demo: Create simple waist rig
-    create_simple_waist_rig()
+    # Demo: Create unrigged GLB
+    create_unrigged_glb()
