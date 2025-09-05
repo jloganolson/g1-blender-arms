@@ -86,29 +86,93 @@ def create_bone_connection(parent_bone: BoneInfo, child_bone: BoneInfo) -> Tuple
     return cylinder, transform
 
 
-def create_mesh_primitive(instance_name: str, original_position: np.ndarray, 
-                         final_position: np.ndarray, controlled_by_bone: bool = False) -> Tuple[trimesh.Trimesh, np.ndarray]:
+def load_and_process_stl(mesh_file_path: Path, controlled_by_bone: bool = False, 
+                        simplify: bool = True, max_faces: int = 1000) -> trimesh.Trimesh:
     """
-    Create a primitive shape to represent a mesh instance.
+    Load and process an STL file for visualization.
+    Returns processed mesh with appropriate colors.
+    """
+    try:
+        # Load the STL file
+        mesh = trimesh.load(str(mesh_file_path))
+        
+        # Handle scene vs direct mesh
+        if isinstance(mesh, trimesh.Scene):
+            if len(mesh.geometry) == 0:
+                raise ValueError(f"No geometry found in {mesh_file_path}")
+            mesh = list(mesh.geometry.values())[0]
+        
+        if not isinstance(mesh, trimesh.Trimesh):
+            raise ValueError(f"Loaded object is not a valid mesh: {type(mesh)}")
+        
+        # Simplify if needed for better performance
+        if simplify and len(mesh.faces) > max_faces:
+            print(f"    Simplifying {mesh_file_path.name}: {len(mesh.faces)} -> {max_faces} faces")
+            mesh = mesh.simplify_quadric_decimation(face_count=max_faces)
+        
+        # Color based on whether it's controlled by a bone
+        if controlled_by_bone:
+            # Magenta for bone-controlled meshes
+            mesh.visual.vertex_colors = [255, 0, 255, 255]
+        else:
+            # Yellow for uncontrolled meshes
+            mesh.visual.vertex_colors = [255, 255, 0, 255]
+        
+        return mesh
+        
+    except Exception as e:
+        print(f"    Warning: Could not load {mesh_file_path}: {e}")
+        # Fallback to a small cube
+        mesh_size = 0.015
+        fallback_mesh = trimesh.creation.box(extents=[mesh_size, mesh_size, mesh_size])
+        
+        # Color the fallback mesh differently (red for errors)
+        fallback_mesh.visual.vertex_colors = [255, 0, 0, 255]
+        return fallback_mesh
+
+
+def create_mesh_primitive(instance_name: str, mesh_name: str, original_position: np.ndarray, 
+                         final_position: np.ndarray, controlled_by_bone: bool = False,
+                         parser: 'MJCFParser' = None, mesh_cache: dict = None) -> Tuple[trimesh.Trimesh, np.ndarray]:
+    """
+    Create a mesh instance using the actual STL geometry.
     Returns (mesh, transform_matrix)
     """
-    # Create a small cube to represent the mesh
-    mesh_size = 0.015
-    mesh_cube = trimesh.creation.box(extents=[mesh_size, mesh_size, mesh_size])
+    if mesh_cache is None:
+        mesh_cache = {}
     
-    # Color based on whether it's controlled by a bone
-    if controlled_by_bone:
-        # Magenta for bone-controlled meshes
-        mesh_cube.visual.vertex_colors = [255, 0, 255, 255]
+    # Try to load the actual STL mesh
+    if parser:
+        mesh_file_path = parser.get_mesh_file_path(mesh_name)
+        if mesh_file_path and mesh_file_path.exists():
+            # Check cache first
+            cache_key = (str(mesh_file_path), controlled_by_bone)
+            if cache_key in mesh_cache:
+                mesh = mesh_cache[cache_key].copy()
+            else:
+                mesh = load_and_process_stl(mesh_file_path, controlled_by_bone)
+                mesh_cache[cache_key] = mesh
+                mesh = mesh.copy()  # Return a copy to avoid modifying the cached version
+        else:
+            print(f"    Warning: Could not find mesh file for {mesh_name}")
+            # Fallback to cube
+            mesh_size = 0.015
+            mesh = trimesh.creation.box(extents=[mesh_size, mesh_size, mesh_size])
+            mesh.visual.vertex_colors = [255, 0, 0, 255]  # Red for missing files
     else:
-        # Yellow for uncontrolled meshes
-        mesh_cube.visual.vertex_colors = [255, 255, 0, 255]
+        # Fallback to cube if no parser provided
+        mesh_size = 0.015
+        mesh = trimesh.creation.box(extents=[mesh_size, mesh_size, mesh_size])
+        if controlled_by_bone:
+            mesh.visual.vertex_colors = [255, 0, 255, 255]
+        else:
+            mesh.visual.vertex_colors = [255, 255, 0, 255]
     
-    # Position the cube at the final position
+    # Position the mesh at the final position
     transform = np.eye(4)
     transform[:3, 3] = final_position
     
-    return mesh_cube, transform
+    return mesh, transform
 
 
 def create_mesh_displacement_line(original_position: np.ndarray, final_position: np.ndarray) -> Tuple[trimesh.Trimesh, np.ndarray]:
@@ -161,6 +225,9 @@ def visualize_bone_hierarchy(mjcf_path: str, output_path: str, target_joints: Li
     
     # Parse MJCF and build bone hierarchy
     parser = MJCFParser(mjcf_path)
+    
+    # Cache for loaded meshes to avoid reloading the same STL multiple times
+    mesh_cache = {}
     
     if target_joints is None:
         target_joints = [
@@ -289,12 +356,13 @@ def visualize_bone_hierarchy(mjcf_path: str, output_path: str, target_joints: Li
                 else:
                     print(f"    No bone control (unweighted)")
                 
-                # Create mesh primitive
+                # Create mesh primitive using actual STL
                 original_position = original_transform_matrix[:3, 3]
                 final_position = final_transform_matrix[:3, 3]
                 
                 mesh_primitive, mesh_transform = create_mesh_primitive(
-                    instance_name, original_position, final_position, controlled_by_bone
+                    instance_name, mesh_name, original_position, final_position, 
+                    controlled_by_bone, parser, mesh_cache
                 )
                 
                 scene.add_geometry(mesh_primitive, node_name=f"mesh_{instance_name}", transform=mesh_transform)
@@ -363,9 +431,11 @@ def visualize_bone_hierarchy(mjcf_path: str, output_path: str, target_joints: Li
     print(f"Blue spheres: Child bones")
     print(f"Green cylinders: Bone connections")
     if include_meshes:
-        print(f"Magenta cubes: Bone-controlled meshes")
-        print(f"Yellow cubes: Uncontrolled meshes")
+        print(f"Magenta STL meshes: Bone-controlled meshes")
+        print(f"Yellow STL meshes: Uncontrolled meshes")
+        print(f"Red cubes: Missing/error meshes (fallback)")
         print(f"Orange lines: Mesh displacement due to bone transforms")
+        print(f"Loaded {len(mesh_cache)} unique STL files")
     print(f"RGB axes: Coordinate reference (X=red, Y=green, Z=blue)")
     print(f"Total bones: {len(bones)}")
     print(f"Total connections: {len([b for b in bones.values() if b.parent_bone])}")
