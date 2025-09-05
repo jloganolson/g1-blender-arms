@@ -10,7 +10,7 @@ import trimesh
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from armature_exporter.mjcf_parser import MJCFParser
-from armature_exporter.gltf_armature_builder import build_bone_hierarchy, BoneInfo
+from armature_exporter.rigged_gltf_exporter import create_rigged_glb, build_bone_hierarchy, BoneInfo
 from render_glb_screenshot import render_glb_multiview
 
 
@@ -453,80 +453,63 @@ def visualize_bone_hierarchy(mjcf_path: str, output_path: str, target_joints: Li
 def main():
     """Test with different models and joint sets."""
     
-    # Test 1: Simple MVP model with bones and meshes
-    print("=== Test 1: MVP model with bones and meshes ===")
+    # Common settings
+    mvp_mjcf_path = "g1_description/mvp_test.xml"
+    mvp_joints = ["waist_yaw_joint", "right_shoulder_pitch_joint"]
+    full_g1_mjcf_path = "g1_description/g1_mjx_alt.xml"
+    
+    # Test 1: Simple MVP model - visualization
+    print("=== Test 1: MVP model visualization ===")
     visualize_bone_hierarchy(
-        mjcf_path="g1_description/mvp_test.xml",
+        mjcf_path=mvp_mjcf_path,
         output_path="output/bone_mesh_hierarchy_mvp.glb",
-        target_joints=["waist_yaw_joint", "right_shoulder_pitch_joint"],
+        target_joints=mvp_joints,
         include_meshes=True
     )
     
     print("\n" + "="*50 + "\n")
     
-    # Test 2: Bones only for comparison
-    print("=== Test 2: MVP model bones only ===")
-    visualize_bone_hierarchy(
-        mjcf_path="g1_description/mvp_test.xml",
-        output_path="output/bone_hierarchy_mvp_bones_only.glb",
-        target_joints=["waist_yaw_joint", "right_shoulder_pitch_joint"],
-        include_meshes=False
+    # Test 2: Simple MVP model - rigged GLB export
+    print("=== Test 2: MVP model rigged GLB export ===")
+    create_rigged_glb(
+        mjcf_path=mvp_mjcf_path,
+        output_path="output/robot_rigged_mvp.glb",
+        target_joints=mvp_joints
     )
     
     print("\n" + "="*50 + "\n")
     
-    # Test 3: Check what joints are available in full model and test full robot
+    # Test 3: Full G1 model joint discovery
     print("=== Test 3: Full G1 model joint discovery ===")
-    parser = MJCFParser("g1_description/g1_mjx_alt.xml")
-    print("Available joints in g1_mjx_alt.xml:")
+    parser = MJCFParser(full_g1_mjcf_path)
+    print(f"Available joints in {full_g1_mjcf_path}:")
     for joint_name in sorted(parser.joints.keys()):
         print(f"  {joint_name}")
     
-    # Test with the full robot (excluding floating_base_joint which is usually not needed for visualization)
+    # Define the full set of joints for the robot
     all_robot_joints = [
-        "waist_yaw_joint",
-        # Left arm
-        "left_shoulder_pitch_joint",
-        "left_shoulder_roll_joint", 
-        "left_shoulder_yaw_joint",
-        "left_elbow_joint",
-        "left_wrist_roll_joint",
-        # Right arm
-        "right_shoulder_pitch_joint",
-        "right_shoulder_roll_joint",
-        "right_shoulder_yaw_joint", 
-        "right_elbow_joint",
-        "right_wrist_roll_joint",
-        # Left leg
-        "left_hip_pitch_joint",
-        "left_hip_roll_joint",
-        "left_hip_yaw_joint",
-        "left_knee_joint",
-        "left_ankle_pitch_joint",
-        "left_ankle_roll_joint",
-        # Right leg
-        "right_hip_pitch_joint",
-        "right_hip_roll_joint",
-        "right_hip_yaw_joint",
-        "right_knee_joint",
-        "right_ankle_pitch_joint",
-        "right_ankle_roll_joint",
+        "waist_yaw_joint", "waist_roll_joint", "waist_pitch_joint",
+        "right_hip_pitch_joint", "right_hip_roll_joint", "right_hip_yaw_joint",
+        "right_knee_joint", "right_ankle_pitch_joint", "right_ankle_roll_joint",
+        "left_hip_pitch_joint", "left_hip_roll_joint", "left_hip_yaw_joint", 
+        "left_knee_joint", "left_ankle_pitch_joint", "left_ankle_roll_joint",
+        "right_shoulder_pitch_joint", "right_shoulder_roll_joint", "right_shoulder_yaw_joint",
+        "right_elbow_joint", "right_wrist_roll_joint", "right_wrist_pitch_joint", "right_wrist_yaw_joint",
+        "left_shoulder_pitch_joint", "left_shoulder_roll_joint", "left_shoulder_yaw_joint",
+        "left_elbow_joint", "left_wrist_roll_joint", "left_wrist_pitch_joint", "left_wrist_yaw_joint"
     ]
     
-    # Filter to only joints that actually exist
+    # Filter for joints that exist in the model
     existing_joints = [j for j in all_robot_joints if j in parser.joints]
-    print(f"\nFiltered joints that exist: {existing_joints}")
-    print(f"Total joints to visualize: {len(existing_joints)}")
+    print(f"\nFiltered to {len(existing_joints)} existing joints for rigging.")
     
     if existing_joints:
-        print("\n=== Test 4: Full G1 model with all robot joints and meshes ===")
-        visualize_bone_hierarchy(
-            mjcf_path="g1_description/g1_mjx_alt.xml",
-            output_path="output/bone_mesh_hierarchy_g1_full_robot.glb",
-            target_joints=existing_joints,
-            include_meshes=True
+        print("\n=== Test 4: Full G1 model rigged GLB export ===")
+        create_rigged_glb(
+            mjcf_path=full_g1_mjcf_path,
+            output_path="output/robot_rigged_g1_full.glb",
+            target_joints=existing_joints
         )
-
 
 if __name__ == "__main__":
     main()
