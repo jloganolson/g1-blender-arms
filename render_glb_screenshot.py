@@ -13,7 +13,104 @@ import pyrender
 from PIL import Image, ImageDraw, ImageFont
 
 
-def render_glb_multiview(glb_file, output_file=None, view_width=400, view_height=300):
+def get_scene_bounds_and_center(scene):
+    """
+    Get the actual bounding box and center of all visible geometries in the scene.
+    This ensures we capture the true extent of the model, not just the scene bounds.
+    
+    Args:
+        scene: Loaded trimesh scene
+        
+    Returns:
+        tuple: (bounds, center, extents) where:
+            - bounds: [min_point, max_point] array
+            - center: center point of the actual geometry
+            - extents: size in each dimension [x, y, z]
+    """
+    all_vertices = []
+    
+    # Collect all vertices from all geometries
+    for name, geom in scene.geometry.items():
+        if hasattr(geom, 'vertices') and len(geom.vertices) > 0:
+            # Apply any transforms from the scene graph
+            vertices = geom.vertices
+            if name in scene.graph.nodes:
+                # Get the transform for this geometry
+                transform, _ = scene.graph.get(name)
+                if transform is not None:
+                    # Apply transform to vertices
+                    homogeneous_verts = np.hstack([vertices, np.ones((vertices.shape[0], 1))])
+                    transformed_verts = (transform @ homogeneous_verts.T).T[:, :3]
+                    vertices = transformed_verts
+            all_vertices.append(vertices)
+    
+    if not all_vertices:
+        # Fallback to scene bounds if no vertices found
+        print("Warning: No vertices found in geometries, using scene bounds")
+        scene_bounds = scene.bounds
+        scene_center = scene_bounds.mean(axis=0)
+        scene_extents = scene_bounds[1] - scene_bounds[0]
+        return scene_bounds, scene_center, scene_extents
+    
+    # Combine all vertices
+    combined_vertices = np.vstack(all_vertices)
+    
+    # Calculate true bounds
+    min_point = np.min(combined_vertices, axis=0)
+    max_point = np.max(combined_vertices, axis=0)
+    bounds = np.array([min_point, max_point])
+    
+    # Calculate center and extents
+    center = (min_point + max_point) / 2.0
+    extents = max_point - min_point
+    
+    print(f"Analyzed {len(all_vertices)} geometry groups with {combined_vertices.shape[0]} total vertices")
+    
+    return bounds, center, extents
+
+
+def calculate_optimal_camera_distance(extents, yfov, aspect, margin_factor=1.3):
+    """
+    Calculate the optimal camera distance to fit the model in frame.
+    Uses both horizontal and vertical FOV to ensure the model fits regardless of aspect ratio.
+    
+    Args:
+        extents: Model extents in [x, y, z]
+        yfov: Vertical field of view in radians
+        aspect: Width/height ratio
+        margin_factor: Extra margin around the model (default: 1.3 = 30% margin)
+        
+    Returns:
+        float: Optimal camera distance
+    """
+    # For a perspective camera, we need to fit the model in both dimensions
+    # The model's "radius" in the camera's view depends on the viewing direction
+    # We'll use the maximum extent in any dimension as a conservative estimate
+    
+    # Calculate distances needed for vertical and horizontal FOV
+    max_extent_y = max(extents[1], extents[2])  # Y or Z extent for vertical FOV
+    max_extent_x = max(extents[0], extents[2])  # X or Z extent for horizontal FOV
+    
+    # Distance needed to fit vertically
+    dist_vertical = (max_extent_y / 2.0) / np.tan(yfov / 2.0)
+    
+    # Distance needed to fit horizontally (calculate horizontal FOV)
+    hfov = 2.0 * np.arctan(np.tan(yfov / 2.0) * aspect)
+    dist_horizontal = (max_extent_x / 2.0) / np.tan(hfov / 2.0)
+    
+    # Use the larger distance to ensure model fits in both dimensions
+    optimal_distance = max(dist_vertical, dist_horizontal) * margin_factor
+    
+    print(f"Camera distance calculation:")
+    print(f"  Extents: {extents}")
+    print(f"  Vertical FOV: {np.degrees(yfov):.1f}°, Horizontal FOV: {np.degrees(hfov):.1f}°")
+    print(f"  Required distances: vertical={dist_vertical:.2f}, horizontal={dist_horizontal:.2f}")
+    print(f"  Optimal distance with {margin_factor}x margin: {optimal_distance:.2f}")
+    
+    return optimal_distance
+
+
+def render_glb_multiview(glb_file, output_file=None, view_width=512, view_height=512):
     """
     Convenient function to render a GLB file to a multi-view PNG screenshot.
     Designed for programmatic use from other scripts.
@@ -21,8 +118,8 @@ def render_glb_multiview(glb_file, output_file=None, view_width=400, view_height
     Args:
         glb_file: Path to GLB file (str or Path)
         output_file: Output PNG path (str or Path). If None, uses GLB name with .png
-        view_width: Width of each individual view (default: 400)
-        view_height: Height of each individual view (default: 300)
+        view_width: Width of each individual view (default: 512)
+        view_height: Height of each individual view (default: 512)
         
     Returns:
         bool: True if successful, False otherwise
@@ -47,7 +144,7 @@ def render_glb_multiview(glb_file, output_file=None, view_width=400, view_height
     )
 
 
-def render_glb_single(glb_file, output_file=None, width=800, height=600):
+def render_glb_single(glb_file, output_file=None, width=512, height=512):
     """
     Convenient function to render a GLB file to a single-view PNG screenshot.
     Designed for programmatic use from other scripts.
@@ -55,8 +152,8 @@ def render_glb_single(glb_file, output_file=None, width=800, height=600):
     Args:
         glb_file: Path to GLB file (str or Path)
         output_file: Output PNG path (str or Path). If None, uses GLB name with .png
-        width: Image width (default: 800)
-        height: Image height (default: 600)
+        width: Image width (default: 512)
+        height: Image height (default: 512)
         
     Returns:
         bool: True if successful, False otherwise
@@ -81,7 +178,7 @@ def render_glb_single(glb_file, output_file=None, width=800, height=600):
     )
 
 
-def render_glb_to_png(glb_path: Path, output_path: Path, width: int = 800, height: int = 600):
+def render_glb_to_png(glb_path: Path, output_path: Path, width: int = 512, height: int = 512):
     """
     Render a GLB file to a PNG screenshot using headless rendering.
     
@@ -102,61 +199,33 @@ def render_glb_to_png(glb_path: Path, output_path: Path, width: int = 800, heigh
     
     print(f"Loaded scene with {len(scene.geometry)} geometries")
     
-    # Get scene bounds to set up camera
-    scene_bounds = scene.bounds
-    scene_center = scene_bounds.mean(axis=0)
-    scene_scale = np.linalg.norm(scene_bounds[1] - scene_bounds[0])
+    # Get scene bounds and calculate proper centering
+    scene_bounds, scene_center, scene_extents = get_scene_bounds_and_center(scene)
     
     print(f"Scene center: {scene_center}")
-    print(f"Scene scale: {scene_scale:.2f}")
+    print(f"Scene extents: {scene_extents}")
     print(f"Scene bounds: {scene_bounds}")
     
-    # Create pyrender scene manually to have more control
-    pyrender_scene = pyrender.Scene(ambient_light=[0.1, 0.1, 0.1])
+    # Build pyrender scene from the trimesh scene to preserve node transforms
+    pyrender_scene = pyrender.Scene.from_trimesh_scene(scene, ambient_light=[0.1, 0.1, 0.1])
     
-    # Add all meshes to the scene with materials
-    for name, geom in scene.geometry.items():
-        if hasattr(geom, 'vertices') and len(geom.vertices) > 0:
-            # Create material for better visibility
-            material = pyrender.MetallicRoughnessMaterial(
-                baseColorFactor=[0.8, 0.8, 0.8, 1.0],
-                metallicFactor=0.1,
-                roughnessFactor=0.8
-            )
-            
-            # Create pyrender mesh
-            mesh = pyrender.Mesh.from_trimesh(geom, material=material)
-            pyrender_scene.add(mesh)
-            print(f"Added mesh: {name}")
-    
-    # Set up camera - position it to view the entire model
-    camera_distance = scene_scale * 2.0  # Move camera further back
+    # Compute optimal camera distance that fits the model in frame
+    yfov = np.pi / 4.0
+    aspect = width / height
+    camera_distance = calculate_optimal_camera_distance(scene_extents, yfov, aspect)
     
     # Position camera at an angle to see the model better
-    camera_pos = scene_center + np.array([camera_distance * 0.5, camera_distance * 0.5, camera_distance * 0.8])
+    view_dir = np.array([0.5, 0.5, 0.8])
+    view_dir = view_dir / np.linalg.norm(view_dir)
+    camera_pos = scene_center + view_dir * camera_distance
     
-    # Create camera transformation matrix (look at the center)
-    # Camera looks toward scene center from camera_pos
-    view_direction = scene_center - camera_pos
-    view_direction = view_direction / np.linalg.norm(view_direction)
-    
-    # Create right and up vectors
-    up = np.array([0, 0, 1])  # Z-up
-    right = np.cross(view_direction, up)
-    right = right / np.linalg.norm(right)
-    up = np.cross(right, view_direction)
-    
-    # Create camera pose matrix
-    camera_pose = np.eye(4)
-    camera_pose[:3, 0] = right
-    camera_pose[:3, 1] = up
-    camera_pose[:3, 2] = -view_direction  # Negative because camera looks down -Z
-    camera_pose[:3, 3] = camera_pos
+    # Create camera pose matrix using a look-at helper
+    camera_pose = create_lookat_matrix(camera_pos, scene_center, np.array([0, 0, 1]))
     
     print(f"Camera position: {camera_pos}")
     print(f"Looking at: {scene_center}")
     
-    camera = pyrender.PerspectiveCamera(yfov=np.pi / 4.0, aspectRatio=width/height)
+    camera = pyrender.PerspectiveCamera(yfov=yfov, aspectRatio=aspect)
     pyrender_scene.add(camera, pose=camera_pose)
     
     # Add multiple lights for better illumination
@@ -219,18 +288,20 @@ def render_glb_to_png(glb_path: Path, output_path: Path, width: int = 800, heigh
         renderer.delete()
 
 
-def get_camera_poses(scene_center, scene_scale):
+def get_camera_poses(scene_center, scene_extents, yfov=np.pi/4.0, aspect=1.0):
     """
     Generate camera poses for different views: front, side, top, and 3/4 view.
     
     Args:
         scene_center: Center point of the scene
-        scene_scale: Scale of the scene for camera distance
+        scene_extents: Scene extents in [x, y, z]
+        yfov: Vertical field of view for camera distance calculation
+        aspect: Aspect ratio for camera distance calculation
         
     Returns:
         dict: Dictionary of camera poses with view names as keys
     """
-    camera_distance = scene_scale * 2.0
+    camera_distance = calculate_optimal_camera_distance(scene_extents, yfov, aspect)
     poses = {}
     
     # Front view (looking from front, Y- direction)
@@ -245,8 +316,10 @@ def get_camera_poses(scene_center, scene_scale):
     top_pos = scene_center + np.array([0, 0, camera_distance])
     poses['top'] = create_lookat_matrix(top_pos, scene_center, np.array([0, 1, 0]))
     
-    # 3/4 view (current angled view)
-    quarter_pos = scene_center + np.array([camera_distance * 0.5, camera_distance * 0.5, camera_distance * 0.8])
+    # 3/4 view (angled)
+    quarter_dir = np.array([0.5, 0.5, 0.8])
+    quarter_dir = quarter_dir / np.linalg.norm(quarter_dir)
+    quarter_pos = scene_center + quarter_dir * camera_distance
     poses['quarter'] = create_lookat_matrix(quarter_pos, scene_center, np.array([0, 0, 1]))
     
     return poses
@@ -337,15 +410,15 @@ def render_single_view(scene, camera_pose, width, height):
         renderer.delete()
 
 
-def create_multiview_grid(glb_path: Path, output_path: Path, view_width: int = 400, view_height: int = 300):
+def create_multiview_grid(glb_path: Path, output_path: Path, view_width: int = 512, view_height: int = 512):
     """
     Create a 2x2 grid of different camera views of the GLB file.
     
     Args:
         glb_path: Path to the GLB file
         output_path: Path for the output PNG file
-        view_width: Width of each individual view
-        view_height: Height of each individual view
+        view_width: Width of each individual view (default: 512)
+        view_height: Height of each individual view (default: 512)
     """
     print(f"Creating multi-view grid from: {glb_path}")
     
@@ -358,16 +431,16 @@ def create_multiview_grid(glb_path: Path, output_path: Path, view_width: int = 4
     
     print(f"Loaded scene with {len(scene.geometry)} geometries")
     
-    # Get scene bounds for camera positioning
-    scene_bounds = scene.bounds
-    scene_center = scene_bounds.mean(axis=0)
-    scene_scale = np.linalg.norm(scene_bounds[1] - scene_bounds[0])
+    # Get scene bounds and calculate proper centering
+    scene_bounds, scene_center, scene_extents = get_scene_bounds_and_center(scene)
     
     print(f"Scene center: {scene_center}")
-    print(f"Scene scale: {scene_scale:.2f}")
+    print(f"Scene extents: {scene_extents}")
+    print(f"Scene bounds: {scene_bounds}")
     
     # Get camera poses for different views
-    camera_poses = get_camera_poses(scene_center, scene_scale)
+    aspect = view_width / view_height
+    camera_poses = get_camera_poses(scene_center, scene_extents, yfov=np.pi/4.0, aspect=aspect)
     
     # Render each view
     views = {}
@@ -443,14 +516,14 @@ def main():
     parser.add_argument(
         "-w", "--width",
         type=int,
-        default=800,
-        help="Image width in pixels (default: 800, or 400 per view for multi-view)"
+        default=512,
+        help="Image width in pixels (default: 512, or 512 per view for multi-view)"
     )
     parser.add_argument(
         "--height",
         type=int,
-        default=600,
-        help="Image height in pixels (default: 600, or 300 per view for multi-view)"
+        default=512,
+        help="Image height in pixels (default: 512, or 512 per view for multi-view)"
     )
     parser.add_argument(
         "--single-view",
