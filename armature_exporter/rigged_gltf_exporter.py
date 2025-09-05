@@ -62,8 +62,6 @@ class RiggedGLTFExporter:
         
         self.buffer_data = bytearray()
         self.bone_to_node_index: Dict[str, int] = {}
-        # Add this line
-        self.mesh_cache: Dict[str, int] = {}
 
     def _add_buffer_data(self, data: bytes) -> Tuple[int, int]:
         """Add data to buffer, align to 4 bytes, and return (offset, length)."""
@@ -102,11 +100,6 @@ class RiggedGLTFExporter:
 
     def _add_mesh_to_gltf(self, mesh: trimesh.Trimesh, controlling_bone_name: str) -> int:
         """Adds a trimesh object to the GLTF buffer and returns the mesh index."""
-        # Cache meshes to avoid duplicating geometry data
-        mesh_key = hashlib.sha256(mesh.vertices.tobytes() + mesh.faces.tobytes()).hexdigest()
-        if mesh_key in self.mesh_cache:
-            return self.mesh_cache[mesh_key]
-
         vertices = mesh.vertices.astype(np.float32)
         faces = mesh.faces.astype(np.uint32).flatten()
         normals = mesh.vertex_normals.astype(np.float32)
@@ -151,7 +144,6 @@ class RiggedGLTFExporter:
         gltf_mesh = Mesh(primitives=[primitive])
         self.gltf.meshes.append(gltf_mesh)
         mesh_index = len(self.gltf.meshes) - 1
-        self.mesh_cache[mesh_key] = mesh_index
         return mesh_index
 
     def _create_skin(self) -> int:
