@@ -527,28 +527,11 @@ def build_bone_hierarchy(parser: MJCFParser, target_joints: List[str]) -> Tuple[
             else:
                 break
         
-        # Calculate bone transform using same logic as meshes
-        # Get mesh transforms for this body to ensure consistency
-        mesh_transforms = parser.get_mesh_transforms()
-        
-        # Find a mesh associated with this body to get the transform
-        body_position = None
-        body_rotation = None
-        
-        for mesh_name, transforms in mesh_transforms.items():
-            for body_name_in_transform, position, rotation_matrix, material in transforms:
-                if body_name_in_transform == body_name:
-                    body_position = position
-                    body_rotation = rotation_matrix
-                    break
-            if body_position is not None:
-                break
-        
-        # Fallback to compute_global_transform if no mesh found for this body
-        if body_position is None:
-            global_pos, global_rot = parser.compute_global_transform(body_name)
-            body_position = global_pos
-            body_rotation = global_rot
+        # Calculate bone transform using body transform directly
+        # Use compute_global_transform for consistent quaternion handling
+        global_pos, global_rot = parser.compute_global_transform(body_name)
+        body_position = global_pos
+        body_rotation = global_rot
         
         transform_matrix = np.eye(4)
         transform_matrix[:3, :3] = body_rotation

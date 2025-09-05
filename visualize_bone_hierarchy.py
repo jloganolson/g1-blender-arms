@@ -131,12 +131,21 @@ def load_and_process_stl(mesh_file_path: Path, controlled_by_bone: bool = False,
         return fallback_mesh
 
 
-def create_mesh_primitive(instance_name: str, mesh_name: str, original_position: np.ndarray, 
-                         final_position: np.ndarray, controlled_by_bone: bool = False,
+def create_mesh_primitive(instance_name: str, mesh_name: str, original_transform: np.ndarray, 
+                         final_transform: np.ndarray, controlled_by_bone: bool = False,
                          parser: 'MJCFParser' = None, mesh_cache: dict = None) -> Tuple[trimesh.Trimesh, np.ndarray]:
     """
     Create a mesh instance using the actual STL geometry.
-    Returns (mesh, transform_matrix)
+    Args:
+        instance_name: Name of the mesh instance
+        mesh_name: Name of the mesh file
+        original_transform: Original 4x4 transform matrix from MJCF
+        final_transform: Final 4x4 transform matrix (possibly adjusted for bone control)
+        controlled_by_bone: Whether this mesh is controlled by a bone
+        parser: MJCF parser for loading mesh files
+        mesh_cache: Cache for loaded meshes
+    Returns:
+        (mesh, transform_matrix)
     """
     if mesh_cache is None:
         mesh_cache = {}
@@ -168,11 +177,9 @@ def create_mesh_primitive(instance_name: str, mesh_name: str, original_position:
         else:
             mesh.visual.vertex_colors = [255, 255, 0, 255]
     
-    # Position the mesh at the final position
-    transform = np.eye(4)
-    transform[:3, 3] = final_position
-    
-    return mesh, transform
+    # Apply the final transform (includes both position and rotation)
+    # Note: The mesh itself will be transformed when added to the scene
+    return mesh, final_transform
 
 
 def create_mesh_displacement_line(original_position: np.ndarray, final_position: np.ndarray) -> Tuple[trimesh.Trimesh, np.ndarray]:
@@ -361,7 +368,7 @@ def visualize_bone_hierarchy(mjcf_path: str, output_path: str, target_joints: Li
                 final_position = final_transform_matrix[:3, 3]
                 
                 mesh_primitive, mesh_transform = create_mesh_primitive(
-                    instance_name, mesh_name, original_position, final_position, 
+                    instance_name, mesh_name, original_transform_matrix, final_transform_matrix, 
                     controlled_by_bone, parser, mesh_cache
                 )
                 
@@ -468,35 +475,54 @@ def main():
     
     print("\n" + "="*50 + "\n")
     
-    # Test 3: Check what joints are available in full model
+    # Test 3: Check what joints are available in full model and test full robot
     print("=== Test 3: Full G1 model joint discovery ===")
     parser = MJCFParser("g1_description/g1_mjx_alt.xml")
     print("Available joints in g1_mjx_alt.xml:")
     for joint_name in sorted(parser.joints.keys()):
         print(f"  {joint_name}")
     
-    # Test with a reasonable subset
-    arm_joints = [
+    # Test with the full robot (excluding floating_base_joint which is usually not needed for visualization)
+    all_robot_joints = [
         "waist_yaw_joint",
+        # Left arm
         "left_shoulder_pitch_joint",
         "left_shoulder_roll_joint", 
         "left_shoulder_yaw_joint",
         "left_elbow_joint",
+        "left_wrist_roll_joint",
+        # Right arm
         "right_shoulder_pitch_joint",
         "right_shoulder_roll_joint",
         "right_shoulder_yaw_joint", 
         "right_elbow_joint",
+        "right_wrist_roll_joint",
+        # Left leg
+        "left_hip_pitch_joint",
+        "left_hip_roll_joint",
+        "left_hip_yaw_joint",
+        "left_knee_joint",
+        "left_ankle_pitch_joint",
+        "left_ankle_roll_joint",
+        # Right leg
+        "right_hip_pitch_joint",
+        "right_hip_roll_joint",
+        "right_hip_yaw_joint",
+        "right_knee_joint",
+        "right_ankle_pitch_joint",
+        "right_ankle_roll_joint",
     ]
     
     # Filter to only joints that actually exist
-    existing_joints = [j for j in arm_joints if j in parser.joints]
+    existing_joints = [j for j in all_robot_joints if j in parser.joints]
     print(f"\nFiltered joints that exist: {existing_joints}")
+    print(f"Total joints to visualize: {len(existing_joints)}")
     
     if existing_joints:
-        print("\n=== Test 4: Full G1 model with arm joints and meshes ===")
+        print("\n=== Test 4: Full G1 model with all robot joints and meshes ===")
         visualize_bone_hierarchy(
             mjcf_path="g1_description/g1_mjx_alt.xml",
-            output_path="output/bone_mesh_hierarchy_g1_arms.glb",
+            output_path="output/bone_mesh_hierarchy_g1_full_robot.glb",
             target_joints=existing_joints,
             include_meshes=True
         )
