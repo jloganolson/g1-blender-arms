@@ -1,6 +1,6 @@
 # G1 Blender Arms Exporter
 
-This project exports a rigged GLB file from a MuJoCo MJCF file. The resulting GLB file contains an armature where meshes are parented to bones, suitable for use in 3D software like Blender.
+This project exports a simple rigged GLB file from a MuJoCo MJCF file for use in Blender.
 
 ![Rigged model in Blender](rigged.png)
 
